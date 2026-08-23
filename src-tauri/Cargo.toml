@@ -1,0 +1,56 @@
+[package]
+name = "folio"
+version = "0.1.0"
+description = "A calm, multi-format ebook reader"
+authors = ["Yayang Setya Nugroho"]
+edition = "2021"
+rust-version = "1.82"
+
+[lib]
+# staticlib/cdylib are what the iOS and Android harnesses link against; rlib
+# keeps `cargo test` and the desktop binary working.
+name = "folio_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2.11", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-os = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+parking_lot = "0.12"
+
+rusqlite = { version = "0.40", features = ["bundled"] }
+zip = "8"
+quick-xml = "0.42"
+mobi = "0.8"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
+sha2 = "0.10"
+walkdir = "2"
+percent-encoding = "2"
+
+# RAR support ships a C++ decoder. It is fine on desktop but is a cross-compile
+# hazard against the Android NDK, so the dependency is target-scoped and the
+# code that uses it is additionally gated on `not(target_os = "android")` —
+# an Android build therefore needs no special flags.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+unrar = { version = "0.5", optional = true }
+
+[features]
+default = ["cbr"]
+cbr = ["dep:unrar"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

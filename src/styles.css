@@ -1,0 +1,167 @@
+@import "tailwindcss";
+
+/* Fallback palette, replaced at runtime by `applyTheme`. Declaring it here
+   means the very first paint is already the right colour. */
+:root {
+  --bg: #17130f;
+  --surface: #211b16;
+  --surface-2: #2b231c;
+  --border: #3a3028;
+  --text: #eee6da;
+  --text-dim: #a29584;
+  --accent: #e1a24a;
+  --accent-soft: #3a2c1a;
+  --on-accent: #1a1309;
+  --paper: #1d1813;
+  --ink: #e3dacb;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 34px rgba(0, 0, 0, 0.45);
+
+  /* Space the window controls need at the top-left. Set per platform in App. */
+  --titlebar-inset: 0px;
+}
+
+[data-os="macos"] {
+  --titlebar-inset: 78px;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface2: var(--surface-2);
+  --color-line: var(--border);
+  --color-ink: var(--text);
+  --color-dim: var(--text-dim);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-on-accent: var(--on-accent);
+  --color-paper: var(--paper);
+  --color-page-ink: var(--ink);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-serif: "Iowan Old Style", Georgia, serif;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior: none;
+  }
+
+  /* Nothing in the app is a document to be text-selected except book content
+     and input fields; selecting UI chrome only ever happens by accident. */
+  body {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  input,
+  textarea,
+  [data-selectable] {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  button {
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--text-dim) 35%, transparent);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+  }
+
+  .field {
+    width: 100%;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.5rem 0.75rem;
+    color: var(--text);
+    outline: none;
+  }
+  .field:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 22%, transparent);
+  }
+
+  /* Drag region for the frameless macOS title bar. */
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+}
+
+@layer utilities {
+  .fade-mask-b {
+    mask-image: linear-gradient(to bottom, black 70%, transparent);
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Reader page surface, shared by every format so margins and shadows match. */
+.reader-surface {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+@keyframes folio-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rise {
+  animation: folio-rise 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise {
+    animation: none;
+  }
+  * {
+    scroll-behavior: auto !important;
+  }
+}
