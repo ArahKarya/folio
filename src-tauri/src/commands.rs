@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::ipc::Response;
 use tauri::State;
 
@@ -15,6 +15,13 @@ use crate::{library, util};
 /// Key for the sync folder. The `local.` prefix keeps it out of the sync
 /// bundle — see `sync::LOCAL_PREFIX`.
 const SYNC_FOLDER_KEY: &str = "local.syncFolder";
+
+/// Hard cap on the size of a sync bundle Folio will accept. A real library
+/// of several thousand heavily-annotated books compresses to a few hundred
+/// kilobytes; the 64 MiB cap exists so a crafted or accidentally-large file
+/// cannot exhaust memory or hold the import thread open for minutes. Mirrored
+/// on export so we never write a bundle larger than we would read.
+const MAX_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
 
 // ---------------------------------------------------------------- library ---
 
@@ -34,6 +41,12 @@ pub fn import_files(
     paths: State<AppPaths>,
     files: Vec<String>,
 ) -> AppResult<ImportReport> {
+    if files.len() > library::MAX_IMPORT_FILES {
+        return Err(AppError::msg(format!(
+            "Too many files in one batch (limit is {}).",
+            library::MAX_IMPORT_FILES
+        )));
+    }
     let sources: Vec<PathBuf> = files.into_iter().map(PathBuf::from).collect();
     Ok(library::import_many(&db.0.lock(), &paths, &sources))
 }
@@ -383,14 +396,94 @@ pub fn sync_now(db: State<Db>) -> AppResult<SyncReport> {
 /// the reader points the save dialog.
 #[tauri::command]
 pub fn export_sync_bundle(db: State<Db>, file: String) -> AppResult<()> {
+    let target = PathBuf::from(&file);
+    validate_export_target(&target)?;
     let bundle = sync::export(&db.0.lock())?;
-    std::fs::write(file, serde_json::to_vec_pretty(&bundle)?)?;
+    let bytes = serde_json::to_vec_pretty(&bundle)?;
+    if bytes.len() as u64 > MAX_BUNDLE_BYTES {
+        return Err(AppError::msg(format!(
+            "This library is too large to export as a single bundle (limit is {} MB).",
+            MAX_BUNDLE_BYTES / (1024 * 1024)
+        )));
+    }
+    // Write to a sibling temp file first, then atomically rename, so a
+    // half-written bundle never replaces a good one if the disk fills mid-write.
+    let temp = target.with_extension("json.tmp");
+    std::fs::write(&temp, &bytes)?;
+    std::fs::rename(&temp, &target)?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn import_sync_bundle(db: State<Db>, file: String) -> AppResult<SyncReport> {
-    let bytes = std::fs::read(file)?;
+    let path = PathBuf::from(&file);
+    let bytes = read_bounded(&path, MAX_BUNDLE_BYTES)?;
     let bundle: sync::Bundle = serde_json::from_slice(&bytes)?;
     sync::apply(&db.0.lock(), &bundle)
+}
+
+/// A bundle target must look like a JSON file and the parent directory must
+/// already exist and be writable. The dialog already picked a real path, so
+/// any failure here is unusual and worth reporting in plain language.
+fn validate_export_target(path: &Path) -> AppResult<()> {
+    if path.as_os_str().is_empty() {
+        return Err(AppError::msg("Choose a destination for the bundle."));
+    }
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if extension != "json" {
+        return Err(AppError::msg(
+            "Sync bundles must be saved with a .json extension.",
+        ));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        AppError::msg("The destination has no parent folder.")
+    })?;
+    let metadata = std::fs::metadata(parent).map_err(|err| {
+        AppError::msg(format!("The destination folder is not available: {err}"))
+    })?;
+    if !metadata.is_dir() {
+        return Err(AppError::msg(
+            "The destination is not a folder.",
+        ));
+    }
+    Ok(())
+}
+
+/// Read a file with a hard byte cap, so a multi-gigabyte file pointed at
+/// `import_sync_bundle` cannot exhaust memory. The cap is checked against
+/// the file's metadata first so a non-regular file (a device, a pipe) is
+/// rejected before we even open it.
+fn read_bounded(path: &Path, max_bytes: u64) -> AppResult<Vec<u8>> {
+    if path.as_os_str().is_empty() {
+        return Err(AppError::msg("Choose a bundle file to import."));
+    }
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if extension != "json" {
+        return Err(AppError::msg(
+            "Sync bundles are .json files. Pick the bundle Folio exported.",
+        ));
+    }
+    let metadata = std::fs::symlink_metadata(path).map_err(|err| {
+        AppError::msg(format!("Could not read the bundle: {err}"))
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(AppError::msg(
+            "The bundle must be a regular file, not a folder or device.",
+        ));
+    }
+    if metadata.len() > max_bytes {
+        return Err(AppError::msg(format!(
+            "This bundle is too large (limit is {} MB).",
+            max_bytes / (1024 * 1024)
+        )));
+    }
+    Ok(std::fs::read(path)?)
 }

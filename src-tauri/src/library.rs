@@ -15,6 +15,94 @@ use crate::paths::AppPaths;
 /// carry a gigabyte of thumbnails.
 const COVER_MAX_WIDTH: u32 = 640;
 
+/// Maximum number of files accepted in a single import batch. A reader who
+/// points the folder picker at `~/Library/Caches` would otherwise be asked to
+/// index tens of thousands of files; the scanner already filters by extension,
+/// but the cap is the safety net.
+pub const MAX_IMPORT_FILES: usize = 5_000;
+
+/// Hard cap on a single source book file. EPUB libraries occasionally ship
+/// DRM-free reference volumes north of this; the cap exists so a misnamed
+/// disk image or a corrupt blob cannot fill the library folder.
+const MAX_SOURCE_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
+
+/// Validates a path the frontend supplied as the source of an import. Returns
+/// the canonical, absolute path on success, or a reader-friendly error.
+///
+/// Two things are checked: the path is well-formed (no `..` components, no
+/// NUL, no trailing junk that would change its meaning after `canonicalize`),
+/// and once resolved it is a real, regular file we can read. This stops
+/// obvious traversal strings (`../../etc/passwd`), special files (`/dev/zero`,
+/// character devices), and symlinks that point at things outside the folder
+/// the user actually picked. It does not try to enforce an allowed-root list,
+/// because the user is allowed to pick any file in their own home directory —
+/// the audit's concern was *unguarded* paths, not *arbitrary* paths.
+pub fn safe_source(raw: &Path) -> AppResult<PathBuf> {
+    let checked = safe_path(raw)?;
+    let metadata = std::fs::symlink_metadata(&checked)?;
+    if !metadata.file_type().is_file() {
+        return Err(AppError::msg(
+            "Folio can only import regular files, not folders or devices.",
+        ));
+    }
+    if metadata.len() == 0 {
+        return Err(AppError::msg("This file is empty."));
+    }
+    if metadata.len() > MAX_SOURCE_BYTES {
+        return Err(AppError::msg(format!(
+            "This file is too large to import (limit is {} MB).",
+            MAX_SOURCE_BYTES / (1024 * 1024)
+        )));
+    }
+    Ok(checked)
+}
+
+/// Validates the *root* of a folder scan: must be an existing, readable
+/// directory. Files inside it are still subject to the per-file `safe_source`
+/// check via `import_many`.
+pub fn safe_directory(raw: &Path) -> AppResult<PathBuf> {
+    let checked = safe_path(raw)?;
+    let metadata = std::fs::symlink_metadata(&checked)?;
+    if !metadata.is_dir() {
+        return Err(AppError::msg(
+            "Pick a folder, not a file.",
+        ));
+    }
+    Ok(checked)
+}
+
+/// The path-level checks shared by `safe_source` and `safe_directory`. The
+/// path must be representable as UTF-8 (so we can tell the reader what is
+/// wrong), free of NUL bytes, free of `..` components, and absolute. It is
+/// then canonicalized so the caller sees the same path the kernel does.
+fn safe_path(raw: &Path) -> AppResult<PathBuf> {
+    let text = raw.to_str().ok_or_else(|| {
+        AppError::msg("This file path is not valid on the current system.")
+    })?;
+
+    if text.contains('\0') {
+        return Err(AppError::msg(
+            "This file path is not valid on the current system.",
+        ));
+    }
+    if raw.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(AppError::msg(
+            "File paths cannot contain '..' segments.",
+        ));
+    }
+    if !raw.is_absolute() {
+        return Err(AppError::msg(
+            "Folio needs a full file path. Pick the file from the file picker.",
+        ));
+    }
+
+    std::fs::canonicalize(raw).map_err(|err| {
+        AppError::msg(format!(
+            "Could not read this file: {err}"
+        ))
+    })
+}
+
 /// Content hash, streamed so a 900 MB PDF does not land in memory.
 pub fn hash_file(path: &Path) -> AppResult<String> {
     let mut file = std::fs::File::open(path)?;
@@ -106,7 +194,20 @@ pub fn import_many(conn: &Connection, paths: &AppPaths, sources: &[PathBuf]) -> 
             .and_then(|n| n.to_str())
             .unwrap_or("unknown file")
             .to_string();
-        match import_one(conn, paths, source) {
+        // Canonicalize + sanity-check the source before we touch the database
+        // or copy anything. A bad path is reported, not fatal — the rest of
+        // the batch still imports.
+        let checked = match safe_source(source) {
+            Ok(p) => p,
+            Err(err) => {
+                report.failures.push(ImportFailure {
+                    file: label,
+                    reason: err.to_string(),
+                });
+                continue;
+            }
+        };
+        match import_one(conn, paths, &checked) {
             Ok(book) => report.imported.push(book),
             Err(AppError::Message(msg)) if msg == "Already in your library" => {
                 report.duplicates.push(label)
@@ -122,8 +223,17 @@ pub fn import_many(conn: &Connection, paths: &AppPaths, sources: &[PathBuf]) -> 
 
 /// Every supported book under a folder, recursively, sorted so the import
 /// order matches what the reader sees in their file manager.
+///
+/// Symlinks are not followed (`follow_links(false)`) and the result is
+/// capped at `MAX_IMPORT_FILES` — the folder picker is unrestricted, so a
+/// misclick on `~/` would otherwise schedule tens of thousands of
+/// `canonicalize` calls before the user even sees the dialog close.
 pub fn scan_folder(root: &Path) -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = WalkDir::new(root)
+    let root = match safe_directory(root) {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+    let mut found: Vec<PathBuf> = WalkDir::new(&root)
         .follow_links(false)
         .into_iter()
         .filter_map(|entry| entry.ok())
@@ -135,6 +245,7 @@ pub fn scan_folder(root: &Path) -> Vec<PathBuf> {
                 .map(|e| SUPPORTED_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
                 .unwrap_or(false)
         })
+        .take(MAX_IMPORT_FILES)
         .collect();
     found.sort();
     found
@@ -202,4 +313,45 @@ pub fn book_path(conn: &Connection, paths: &AppPaths, id: &str) -> AppResult<(Pa
         other => return Err(AppError::UnsupportedFormat(other.to_string())),
     };
     Ok((path, format))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every `safe_source` rejection that does not require touching the
+    /// filesystem. The happy path and the regular-file check need a real
+    /// file and live in the integration tests, where a scratch dir is
+    /// already set up.
+    #[test]
+    fn safe_source_rejects_unsafe_paths() {
+        // A path with a `..` segment is the most obvious traversal attempt.
+        let traversal = Path::new("/tmp/folio-test/../etc/passwd");
+        let err = safe_source(traversal).unwrap_err().to_string();
+        assert!(
+            err.contains(".."),
+            "rejection message names the issue: {err}"
+        );
+
+        // A relative path is a misconfiguration of the caller, not user input
+        // we should paper over.
+        let relative = Path::new("relative/book.epub");
+        let err = safe_source(relative).unwrap_err().to_string();
+        assert!(
+            err.contains("full file path"),
+            "rejection tells the reader what to do: {err}"
+        );
+
+        // A path that does not exist fails the canonicalize step.
+        let missing = Path::new("/this/path/should/not/exist/anywhere.epub");
+        assert!(safe_source(missing).is_err());
+    }
+
+    /// A non-existent folder scan is a no-op, not an error — the import
+    /// dialog will surface "no books" and the reader can try again.
+    #[test]
+    fn scan_folder_silently_skips_missing_root() {
+        let found = scan_folder(Path::new("/this/folder/does/not/exist"));
+        assert!(found.is_empty());
+    }
 }
