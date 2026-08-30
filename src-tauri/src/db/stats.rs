@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection};
 use std::collections::BTreeMap;
 
-use super::models::{DailyStat, LibraryStats};
+use super::models::{BookTime, DailyStat, LibraryStats};
 use super::{day_key, new_id, now_ms};
 use crate::error::AppResult;
 
@@ -20,7 +20,11 @@ pub fn record_session(conn: &Connection, book_id: &str, seconds: i64) -> AppResu
     Ok(())
 }
 
-const HISTORY_DAYS: i64 = 120;
+/// 53 weeks, so the calendar heatmap always has whole columns to draw.
+const HISTORY_DAYS: i64 = 371;
+
+/// Books listed in the "most time spent" breakdown.
+const TOP_BOOKS: i64 = 10;
 
 pub fn library_stats(conn: &Connection) -> AppResult<LibraryStats> {
     let total_books: i64 = conn.query_row("SELECT COUNT(*) FROM books", [], |r| r.get(0))?;
@@ -29,6 +33,10 @@ pub fn library_stats(conn: &Connection) -> AppResult<LibraryStats> {
         [],
         |r| r.get(0),
     )?;
+    let favorite_books: i64 =
+        conn.query_row("SELECT COUNT(*) FROM books WHERE favorite = 1", [], |r| {
+            r.get(0)
+        })?;
     let reading_books: i64 = conn.query_row(
         "SELECT COUNT(*) FROM progress p JOIN books b ON b.id = p.book_id
           WHERE p.percent > 0.0 AND p.percent < 1.0 AND b.finished_at IS NULL",
@@ -60,11 +68,15 @@ pub fn library_stats(conn: &Connection) -> AppResult<LibraryStats> {
     // shows gaps instead of silently compressing them away.
     let mut daily = Vec::with_capacity(HISTORY_DAYS as usize);
     let mut seconds_this_week = 0;
+    let mut seconds_today = 0;
     for offset in (0..HISTORY_DAYS).rev() {
         let key = day_key((today - offset) * 86_400_000);
         let seconds = totals.get(&key).copied().unwrap_or(0);
         if offset < 7 {
             seconds_this_week += seconds;
+        }
+        if offset == 0 {
+            seconds_today = seconds;
         }
         daily.push(DailyStat { day: key, seconds });
     }
@@ -82,13 +94,42 @@ pub fn library_stats(conn: &Connection) -> AppResult<LibraryStats> {
         }
     }
 
+    // Longest run of consecutive read days anywhere in the window.
+    let mut longest_streak = 0;
+    let mut run = 0;
+    for day in &daily {
+        if day.seconds > 0 {
+            run += 1;
+            longest_streak = longest_streak.max(run);
+        } else {
+            run = 0;
+        }
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT book_id, SUM(seconds) AS total FROM reading_sessions
+          GROUP BY book_id ORDER BY total DESC LIMIT ?1",
+    )?;
+    let per_book = stmt
+        .query_map(params![TOP_BOOKS], |r| {
+            Ok(BookTime {
+                book_id: r.get(0)?,
+                seconds: r.get(1)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
     Ok(LibraryStats {
         total_books,
         finished_books,
         reading_books,
+        favorite_books,
         seconds_total,
         seconds_this_week,
+        seconds_today,
         streak_days,
+        longest_streak,
         daily,
+        per_book,
     })
 }

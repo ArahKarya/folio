@@ -1,22 +1,35 @@
+import { AccentSwatches, ThemeSwatches } from "@/components/settings/ThemePicker";
 import { Segmented, Slider, Switch } from "@/components/ui/Controls";
-import { FONTS, THEMES, THEME_ORDER, type FontId } from "@/lib/theme";
+import { FONTS, type FontId } from "@/lib/theme";
 import { useReader } from "@/store/reader";
 import { useSettings } from "@/store/settings";
 
 export function DisplayPanel() {
   const format = useReader((state) => state.book?.format);
-  const { theme, setTheme, typography, setTypography, behavior, setBehavior } = useSettings();
+  const {
+    activeTheme,
+    accent,
+    setTheme,
+    setAccent,
+    typography,
+    setTypography,
+    behavior,
+    setBehavior,
+  } = useSettings();
   const isComic = format === "comic";
   const isFixed = isComic || format === "pdf";
 
   return (
     <div className="space-y-5 px-4 py-4">
-      <Segmented
-        label="Theme"
-        value={theme}
-        onChange={setTheme}
-        options={THEME_ORDER.map((name) => ({ value: name, label: THEMES[name].label }))}
-      />
+      <section>
+        <h3 className="mb-2 text-[13px] text-dim">Theme</h3>
+        <ThemeSwatches value={activeTheme} onChange={setTheme} accent={accent} />
+      </section>
+
+      <section>
+        <h3 className="mb-2 text-[13px] text-dim">Accent</h3>
+        <AccentSwatches value={accent} onChange={setAccent} />
+      </section>
 
       {isComic ? (
         <>
@@ -120,7 +133,17 @@ export function DisplayPanel() {
         onChange={(margin) => setTypography({ margin })}
       />
 
-      <div className="border-t border-line pt-3">
+      <div className="space-y-2 border-t border-line pt-3">
+        <Segmented
+          label="Page transition"
+          value={behavior.pageTransition}
+          onChange={(pageTransition) => setBehavior({ pageTransition })}
+          options={[
+            { value: "slide", label: "Slide" },
+            { value: "fade", label: "Fade" },
+            { value: "none", label: "None" },
+          ]}
+        />
         <Switch
           label="Tap edges to turn pages"
           hint="Click or tap the left and right thirds"
@@ -132,17 +155,14 @@ export function DisplayPanel() {
           checked={behavior.showRemaining}
           onChange={(showRemaining) => setBehavior({ showRemaining })}
         />
-        <Segmented
-          className="mt-3"
-          label="Page transition"
-          value={behavior.pageTransition}
-          onChange={(pageTransition) => setBehavior({ pageTransition })}
-          options={[
-            { value: "slide", label: "Slide" },
-            { value: "fade", label: "Fade" },
-            { value: "none", label: "None" },
-          ]}
-        />
+        {!isFixed ? (
+          <Switch
+            label="Chapter marks on the progress bar"
+            hint="Hidden automatically when a book's chapters cannot be placed"
+            checked={behavior.showChapterMarks}
+            onChange={(showChapterMarks) => setBehavior({ showChapterMarks })}
+          />
+        ) : null}
       </div>
     </div>
   );

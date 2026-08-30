@@ -81,6 +81,11 @@ pub fn open_book(db: State<Db>, id: String) -> AppResult<Book> {
 }
 
 #[tauri::command]
+pub fn set_favorite(db: State<Db>, id: String, favorite: bool) -> AppResult<Book> {
+    books::set_favorite(&db.0.lock(), &id, favorite)
+}
+
+#[tauri::command]
 pub fn set_page_count(db: State<Db>, id: String, pages: i64) -> AppResult<()> {
     books::set_page_count(&db.0.lock(), &id, pages)
 }
@@ -98,6 +103,33 @@ pub fn set_book_cover(
     let file_name = library::write_cover(&paths, &id, &bytes, "png")?;
     books::set_cover(&db.0.lock(), &id, Some(&file_name))?;
     Ok(file_name)
+}
+
+/// Bytes held by imported books and their covers. Walking the two directories
+/// is cheaper and more honest than summing `file_size` from the database, which
+/// would miss covers and any file removed behind the app's back.
+#[tauri::command]
+pub fn library_size(paths: State<AppPaths>) -> AppResult<u64> {
+    let mut total = 0;
+    for dir in [paths.books(), paths.covers()] {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if let Ok(meta) = entry.metadata() {
+                    if meta.is_file() {
+                        total += meta.len();
+                    }
+                }
+            }
+        }
+    }
+    Ok(total)
+}
+
+/// Absolute path of the folder holding imported books, so Settings can offer to
+/// reveal it in the file manager.
+#[tauri::command]
+pub fn library_folder(paths: State<AppPaths>) -> AppResult<String> {
+    Ok(paths.books().to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -193,14 +225,19 @@ pub fn export_annotations_markdown(db: State<Db>, book_id: String) -> AppResult<
     let conn = db.0.lock();
     let book = books::get(&conn, &book_id)?;
     let items = annotations::list_for_book(&conn, &book_id)?;
+    Ok(markdown_for(&book, &items))
+}
 
+/// Shared by the single-book and whole-library exports so both produce exactly
+/// the same shape.
+fn markdown_for(book: &Book, items: &[Annotation]) -> String {
     let mut out = format!("# {}\n\n", book.title);
     if let Some(author) = &book.author {
         out.push_str(&format!("*{author}*\n\n"));
     }
     if items.is_empty() {
         out.push_str("_No highlights or notes yet._\n");
-        return Ok(out);
+        return out;
     }
 
     let mut chapter = String::new();
@@ -221,17 +258,41 @@ pub fn export_annotations_markdown(db: State<Db>, book_id: String) -> AppResult<
                 out.push_str(&format!("- 🔖 {page}\n\n"));
             }
             _ => {
-                if let Some(text) = item.text.filter(|t| !t.trim().is_empty()) {
+                if let Some(text) = item.text.clone().filter(|t| !t.trim().is_empty()) {
                     for line in text.trim().lines() {
                         out.push_str(&format!("> {}\n", line.trim()));
                     }
                     out.push('\n');
                 }
-                if let Some(note) = item.note.filter(|n| !n.trim().is_empty()) {
+                if let Some(note) = item.note.clone().filter(|n| !n.trim().is_empty()) {
                     out.push_str(&format!("{}\n\n", note.trim()));
                 }
             }
         }
+    }
+    out
+}
+
+/// Every note in the library, in one Markdown document. Books with nothing
+/// saved are skipped rather than printed as empty headings.
+#[tauri::command]
+pub fn export_all_annotations_markdown(db: State<Db>) -> AppResult<String> {
+    let conn = db.0.lock();
+    let mut out = String::from("# Folio notes\n\n");
+    let mut written = 0;
+
+    for book in books::list(&conn)? {
+        let items = annotations::list_for_book(&conn, &book.id)?;
+        if items.is_empty() {
+            continue;
+        }
+        written += 1;
+        out.push_str(&markdown_for(&book, &items));
+        out.push_str("\n---\n\n");
+    }
+
+    if written == 0 {
+        out.push_str("_No highlights or notes yet._\n");
     }
     Ok(out)
 }

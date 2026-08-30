@@ -17,6 +17,8 @@ export interface ReaderControls {
   /** Text of what is on screen right now — used by read-aloud. */
   visibleText: () => Promise<string>;
   search?: (query: string) => Promise<SearchHit[]>;
+  /** The scrolling element, for formats that scroll — enables auto-scroll. */
+  scroller?: () => HTMLElement | null;
   /** Present only where a selection can become a highlight. */
   highlightSelection?: (color: string) => Promise<Annotation | null>;
 }
@@ -34,6 +36,15 @@ interface ReaderState {
   loading: boolean;
   error: string | null;
   controls: ReaderControls | null;
+  /**
+   * Where to jump once the engine is ready. Set before opening a book from the
+   * Notes screen or the command palette, and consumed exactly once.
+   */
+  pendingTarget: string | null;
+  /** Chapter position within the current section, when the format reports it. */
+  chapterPage: { page: number; total: number } | null;
+  /** Chapter boundaries as fractions of the book, for the progress bar. */
+  chapterMarks: number[];
 
   open: (book: Book) => Promise<void>;
   close: () => void;
@@ -46,6 +57,9 @@ interface ReaderState {
   setChromeVisible: (visible: boolean) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
+  setPendingTarget: (target: string | null) => void;
+  setChapterPage: (position: { page: number; total: number } | null) => void;
+  setChapterMarks: (marks: number[]) => void;
   reloadAnnotations: () => Promise<void>;
   saveAnnotation: (input: AnnotationInput) => Promise<Annotation>;
   deleteAnnotation: (id: string) => Promise<void>;
@@ -69,6 +83,9 @@ export const useReader = create<ReaderState>((set, get) => ({
   loading: true,
   error: null,
   controls: null,
+  pendingTarget: null,
+  chapterPage: null,
+  chapterMarks: [],
 
   open: async (book) => {
     set({
@@ -83,6 +100,10 @@ export const useReader = create<ReaderState>((set, get) => ({
       error: null,
       chromeVisible: true,
       controls: null,
+      chapterPage: null,
+      chapterMarks: [],
+      // `pendingTarget` is deliberately untouched: whoever opened the book may
+      // have set it a moment ago and it must survive until the engine is ready.
     });
     const [opened, annotations] = await Promise.all([
       ipc.openBook(book.id),
@@ -96,7 +117,17 @@ export const useReader = create<ReaderState>((set, get) => ({
     const { book, progress, location } = get();
     // Flush immediately: the shelf is about to read this row back.
     if (book) void ipc.setProgress(book.id, progress, location);
-    set({ book: null, controls: null, annotations: [], toc: [], panel: null, focus: false });
+    set({
+      book: null,
+      controls: null,
+      annotations: [],
+      toc: [],
+      panel: null,
+      focus: false,
+      pendingTarget: null,
+      chapterPage: null,
+      chapterMarks: [],
+    });
   },
 
   setToc: (toc) => set({ toc }),
@@ -115,6 +146,9 @@ export const useReader = create<ReaderState>((set, get) => ({
   setChromeVisible: (chromeVisible) => set({ chromeVisible }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error, loading: false }),
+  setPendingTarget: (pendingTarget) => set({ pendingTarget }),
+  setChapterPage: (chapterPage) => set({ chapterPage }),
+  setChapterMarks: (chapterMarks) => set({ chapterMarks }),
 
   reloadAnnotations: async () => {
     const book = get().book;

@@ -26,9 +26,12 @@ export const ipc = {
   setProgress: (id: string, percent: number, location: string | null) =>
     invoke<void>("set_progress", { id, percent, location }),
   setFinished: (id: string, finished: boolean) => invoke<Book>("set_finished", { id, finished }),
+  setFavorite: (id: string, favorite: boolean) => invoke<Book>("set_favorite", { id, favorite }),
   setPageCount: (id: string, pages: number) => invoke<void>("set_page_count", { id, pages }),
   setBookCover: (id: string, data: string) => invoke<string>("set_book_cover", { id, data }),
   supportedExtensions: () => invoke<string[]>("supported_extensions"),
+  librarySize: () => invoke<number>("library_size"),
+  libraryFolder: () => invoke<string>("library_folder"),
 
   bookFilePath: (id: string) => invoke<string>("book_file_path", { id }),
   coversDir: () => invoke<string>("covers_dir"),
@@ -43,6 +46,7 @@ export const ipc = {
   deleteAnnotation: (id: string) => invoke<void>("delete_annotation", { id }),
   exportAnnotationsMarkdown: (bookId: string) =>
     invoke<string>("export_annotations_markdown", { bookId }),
+  exportAllAnnotationsMarkdown: () => invoke<string>("export_all_annotations_markdown"),
 
   listCollections: () => invoke<Collection[]>("list_collections"),
   createCollection: (name: string) => invoke<string>("create_collection", { name }),

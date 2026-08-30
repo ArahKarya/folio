@@ -1,14 +1,38 @@
-import { Library, Plus, Tag, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { BookOpen, CheckCircle2, Circle, Library, Plus, Star, Tag, Trash2 } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { IconButton } from "@/components/ui/Button";
 import { toast } from "@/components/ui/Toast";
 import { errorText } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { useLibrary } from "@/store/library";
+import { onShelf, useLibrary, type ShelfId } from "@/store/library";
+
+const SHELF_ICONS: Record<ShelfId, ReactNode> = {
+  all: <Library size={15} />,
+  reading: <BookOpen size={15} />,
+  unread: <Circle size={15} />,
+  finished: <CheckCircle2 size={15} />,
+  favorites: <Star size={15} />,
+};
+
+const SHELF_LABELS: Array<{ id: ShelfId; label: string }> = [
+  { id: "all", label: "All books" },
+  { id: "reading", label: "Reading" },
+  { id: "unread", label: "Unread" },
+  { id: "finished", label: "Finished" },
+  { id: "favorites", label: "Favourites" },
+];
 
 export function CollectionsSidebar() {
-  const { collections, books, activeCollection, setActiveCollection, createCollection, deleteCollection } =
-    useLibrary();
+  const {
+    collections,
+    books,
+    shelf,
+    setShelf,
+    activeCollection,
+    setActiveCollection,
+    createCollection,
+    deleteCollection,
+  } = useLibrary();
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
 
@@ -34,20 +58,30 @@ export function CollectionsSidebar() {
   };
 
   return (
-    <aside className="hidden w-52 shrink-0 flex-col gap-1 border-r border-line px-3 py-4 lg:flex">
-      <button
-        onClick={() => setActiveCollection(null)}
-        className={cn(
-          "flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] transition",
-          activeCollection === null ? "bg-accent-soft text-accent" : "text-dim hover:bg-surface hover:text-ink",
-        )}
-      >
-        <Library size={16} />
-        <span className="flex-1">All books</span>
-        <span className="tabular text-[11px] opacity-70">{books.length}</span>
-      </button>
+    <aside className="hidden w-52 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-line px-3 py-4 lg:flex">
+      {SHELF_LABELS.map((item) => {
+        const count = books.filter((book) => onShelf(book, item.id)).length;
+        const active = shelf === item.id && !activeCollection;
+        return (
+          <button
+            key={item.id}
+            onClick={() => {
+              setShelf(item.id);
+              setActiveCollection(null);
+            }}
+            className={cn(
+              "flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] transition",
+              active ? "bg-accent-soft text-accent" : "text-dim hover:bg-surface hover:text-ink",
+            )}
+          >
+            {SHELF_ICONS[item.id]}
+            <span className="flex-1">{item.label}</span>
+            <span className="tabular text-[11px] opacity-70">{count}</span>
+          </button>
+        );
+      })}
 
-      <div className="mt-4 flex items-center justify-between px-3">
+      <div className="mt-5 flex items-center justify-between px-3">
         <span className="text-[11px] font-semibold tracking-[0.14em] text-dim uppercase">
           Collections
         </span>
@@ -74,11 +108,14 @@ export function CollectionsSidebar() {
         />
       ) : null}
 
-      <div className="mt-1 flex flex-col gap-0.5 overflow-y-auto">
+      <div className="mt-1 flex flex-col gap-0.5">
         {collections.map((collection) => (
           <div key={collection.id} className="group flex items-center">
             <button
-              onClick={() => setActiveCollection(collection.id)}
+              onClick={() => {
+                setShelf("all");
+                setActiveCollection(collection.id);
+              }}
               className={cn(
                 "flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] transition",
                 activeCollection === collection.id

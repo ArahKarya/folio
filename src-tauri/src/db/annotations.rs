@@ -5,7 +5,7 @@ use super::{new_id, now_ms};
 use crate::error::AppResult;
 
 const SELECT: &str = "SELECT id, book_id, kind, location, location_end, page, chapter, text, note,
-        color, created_at, updated_at FROM annotations";
+        color, data, created_at, updated_at FROM annotations";
 
 fn row_to_annotation(row: &Row) -> rusqlite::Result<Annotation> {
     Ok(Annotation {
@@ -19,8 +19,9 @@ fn row_to_annotation(row: &Row) -> rusqlite::Result<Annotation> {
         text: row.get(7)?,
         note: row.get(8)?,
         color: row.get(9)?,
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
+        data: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
     })
 }
 
@@ -51,11 +52,11 @@ pub fn save(conn: &Connection, input: &AnnotationInput) -> AppResult<Annotation>
     let id = input.id.clone().unwrap_or_else(new_id);
     conn.execute(
         "INSERT INTO annotations (id, book_id, kind, location, location_end, page, chapter,
-             text, note, color, created_at, updated_at, deleted_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, NULL)
+             text, note, color, data, created_at, updated_at, deleted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, NULL)
          ON CONFLICT(id) DO UPDATE SET
              location = ?4, location_end = ?5, page = ?6, chapter = ?7,
-             text = ?8, note = ?9, color = ?10, updated_at = ?11, deleted_at = NULL",
+             text = ?8, note = ?9, color = ?10, data = ?11, updated_at = ?12, deleted_at = NULL",
         params![
             id,
             input.book_id,
@@ -67,6 +68,7 @@ pub fn save(conn: &Connection, input: &AnnotationInput) -> AppResult<Annotation>
             input.text,
             input.note,
             input.color,
+            input.data,
             now,
         ],
     )?;

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { SelectionMenu, type PendingSelection } from "@/components/reader/SelectionMenu";
 import { toast } from "@/components/ui/Toast";
 import {
+  chapterMarks,
   flattenToc,
   sameDocument,
   type EpubBook,
@@ -13,6 +14,7 @@ import {
 } from "@/lib/epub";
 import { bookAssetUrl, errorText, ipc } from "@/lib/ipc";
 import { bookCss } from "@/lib/theme";
+import { usePageTransition } from "@/lib/transitions";
 import { useReader } from "@/store/reader";
 import { useSettings } from "@/store/settings";
 import type { Annotation, Book, SearchHit } from "@/types";
@@ -35,11 +37,14 @@ export function EpubReader({ book }: EpubReaderProps) {
   const renditionRef = useRef<EpubRendition | null>(null);
   const [selection, setSelection] = useState<PendingSelection | null>(null);
 
-  const { theme, typography } = useSettings();
+  const { activeTheme, accent, typography, behavior } = useSettings();
+  const { target: animated, play } = usePageTransition(behavior.pageTransition);
   const annotations = useReader((state) => state.annotations);
   const {
     setToc,
     setChapter,
+    setChapterPage,
+    setChapterMarks,
     setControls,
     setLoading,
     setError,
@@ -71,7 +76,7 @@ export function EpubReader({ book }: EpubReaderProps) {
 
         // Registered before the first display so page one is already themed.
         rendition.hooks.content.register((contents: EpubContents) => {
-          contents.addStylesheetCss(bookCss(theme, typography), STYLE_KEY);
+          contents.addStylesheetCss(bookCss(activeTheme, typography, accent), STYLE_KEY);
         });
 
         await epub.ready;
@@ -88,6 +93,7 @@ export function EpubReader({ book }: EpubReaderProps) {
         // happens after the first page is on screen and the result is cached.
         void prepareLocations(epub, book.id).then(() => {
           if (cancelled) return;
+          setChapterMarks(chapterMarks(epub, toc));
           const current = rendition.location;
           if (current) updatePosition(current, toc);
         });
@@ -130,6 +136,14 @@ export function EpubReader({ book }: EpubReaderProps) {
         progress = 0;
       }
       reportPosition(progress, location.start.cfi);
+      // epub.js counts pages within the section it is showing, which is exactly
+      // "where am I in this chapter".
+      const displayed = location.start.displayed;
+      setChapterPage(
+        displayed && displayed.total > 0
+          ? { page: displayed.page, total: displayed.total }
+          : null,
+      );
       const chapter = toc
         .filter((item) => sameDocument(item.target, location.start.href))
         .at(-1);
@@ -153,13 +167,13 @@ export function EpubReader({ book }: EpubReaderProps) {
   useEffect(() => {
     const rendition = renditionRef.current;
     if (!rendition) return;
-    const css = bookCss(theme, typography);
+    const css = bookCss(activeTheme, typography, accent);
     for (const contents of rendition.getContents()) {
       contents.addStylesheetCss(css, STYLE_KEY);
     }
     rendition.spread(typography.columns === "single" ? "none" : "auto");
     rendition.resize();
-  }, [theme, typography]);
+  }, [activeTheme, accent, typography]);
 
   // --- highlights -----------------------------------------------------------
   useEffect(() => {
@@ -223,8 +237,14 @@ export function EpubReader({ book }: EpubReaderProps) {
 
   useEffect(() => {
     setControls({
-      next: () => void renditionRef.current?.next(),
-      prev: () => void renditionRef.current?.prev(),
+      next: () => {
+        play(1);
+        void renditionRef.current?.next();
+      },
+      prev: () => {
+        play(-1);
+        void renditionRef.current?.prev();
+      },
       goTo: (target) => void renditionRef.current?.display(target),
       visibleText: async () =>
         renditionRef.current?.getContents()[0]?.content.innerText.trim() ?? "",
@@ -232,7 +252,7 @@ export function EpubReader({ book }: EpubReaderProps) {
       highlightSelection: async () => null,
     });
     return () => setControls(null);
-  }, [setControls, search]);
+  }, [setControls, search, play]);
 
   const createHighlight = async (color: string, note: string | null) => {
     if (!selection) return;
@@ -256,7 +276,10 @@ export function EpubReader({ book }: EpubReaderProps) {
   return (
     <>
       <div
-        ref={holder}
+        ref={(node) => {
+          holder.current = node;
+          animated.current = node;
+        }}
         data-selectable
         className="reader-surface h-full w-full"
         style={{

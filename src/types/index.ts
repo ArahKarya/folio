@@ -20,6 +20,7 @@ export interface Book {
   addedAt: number;
   lastOpenedAt: number | null;
   finishedAt: number | null;
+  favorite: boolean;
   updatedAt: number;
   /** 0–1 */
   progress: number;
@@ -51,6 +52,8 @@ export interface Annotation {
   text: string | null;
   note: string | null;
   color: string | null;
+  /** Format-specific payload as JSON — PDF highlights keep their rects here. */
+  data: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -66,6 +69,7 @@ export interface AnnotationInput {
   text?: string | null;
   note?: string | null;
   color?: string | null;
+  data?: string | null;
 }
 
 export interface Collection {
@@ -92,14 +96,28 @@ export interface DailyStat {
   seconds: number;
 }
 
+export interface BookTime {
+  bookId: string;
+  seconds: number;
+}
+
 export interface LibraryStats {
   totalBooks: number;
   finishedBooks: number;
   readingBooks: number;
+  favoriteBooks: number;
   secondsTotal: number;
   secondsThisWeek: number;
+  secondsToday: number;
   streakDays: number;
+  longestStreak: number;
   daily: DailyStat[];
+  perBook: BookTime[];
+}
+
+/** Normalised 0–1 rectangles that let a PDF highlight survive zoom changes. */
+export interface HighlightRects {
+  rects: Array<[number, number, number, number]>;
 }
 
 export interface SyncReport {

@@ -30,7 +30,8 @@ impl Db {
     }
 }
 
-const MIGRATIONS: &[&str] = &[
+/// Public so the integration tests can stand up an older schema on purpose.
+pub const MIGRATIONS: &[&str] = &[
     // v1 — initial schema.
     r#"
     CREATE TABLE books (
@@ -110,6 +111,19 @@ const MIGRATIONS: &[&str] = &[
         value      TEXT NOT NULL,
         updated_at INTEGER NOT NULL
     );
+    "#,
+    // v2 — favourites, syncable book state, and per-format annotation payloads.
+    r#"
+    -- `state_at` stamps favourite and finished together so folder sync can
+    -- resolve them last-write-wins, the same way progress and highlights are.
+    ALTER TABLE books ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE books ADD COLUMN state_at INTEGER NOT NULL DEFAULT 0;
+
+    -- Format-specific payload. PDF highlights keep their normalised rectangles
+    -- here so `location` stays a pure jump target.
+    ALTER TABLE annotations ADD COLUMN data TEXT;
+
+    CREATE INDEX books_favorite ON books(favorite);
     "#,
 ];
 

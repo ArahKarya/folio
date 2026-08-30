@@ -1,6 +1,6 @@
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
-import { BookOpen, Check, Download, Trash2 } from "lucide-react";
+import { BookOpen, Check, Download, Star, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { BookCover } from "./BookCover";
 import { Button } from "@/components/ui/Button";
@@ -31,7 +31,8 @@ function toEdit(book: Book): BookEdit {
 }
 
 export function BookSheet({ book, onClose, onOpen }: BookSheetProps) {
-  const { collections, update, remove, toggleFinished, setMembership } = useLibrary();
+  const { collections, update, remove, toggleFinished, toggleFavorite, setMembership } =
+    useLibrary();
   const [edit, setEdit] = useState<BookEdit | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -219,6 +220,10 @@ export function BookSheet({ book, onClose, onOpen }: BookSheetProps) {
             <Button size="sm" onClick={() => void toggleFinished(book)}>
               <Check size={14} />
               {book.finishedAt ? "Mark unfinished" : "Mark finished"}
+            </Button>
+            <Button size="sm" onClick={() => void toggleFavorite(book)}>
+              <Star size={14} fill={book.favorite ? "currentColor" : "none"} />
+              {book.favorite ? "Unfavourite" : "Favourite"}
             </Button>
             <Button size="sm" onClick={exportNotes}>
               <Download size={14} />

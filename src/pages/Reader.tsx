@@ -1,5 +1,5 @@
 import { AnimatePresence } from "framer-motion";
-import { Suspense, lazy, useCallback, useEffect, useRef } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { ReaderBottomBar } from "@/components/reader/ReaderBottomBar";
 import { ReaderPanel } from "@/components/reader/ReaderPanel";
 import { ReaderTopBar } from "@/components/reader/ReaderTopBar";
@@ -9,6 +9,7 @@ import { EmptyState, LoadingScreen } from "@/components/ui/Spinner";
 import { toast } from "@/components/ui/Toast";
 import { errorText, ipc } from "@/lib/ipc";
 import { useReadAloud } from "@/lib/tts";
+import { useAutoScroll } from "@/lib/transitions";
 import { useReader } from "@/store/reader";
 import { useSettings } from "@/store/settings";
 import type { Book } from "@/types";
@@ -31,6 +32,15 @@ const DocReader = lazy(() =>
 /** How often reading time is banked, in seconds. */
 const TICK = 30;
 
+/**
+ * Nudges the reading size. Reads the store directly so the keyboard handler
+ * never works from a font size captured on an earlier render.
+ */
+function resizeText(delta: number) {
+  const { typography, setTypography } = useSettings.getState();
+  setTypography({ fontSize: Math.min(34, Math.max(13, typography.fontSize + delta)) });
+}
+
 interface ReaderProps {
   book: Book;
   onClose: () => void;
@@ -45,7 +55,8 @@ export function Reader({ book, onClose }: ReaderProps) {
     controls,
     annotations,
     location,
-    chapter,
+    pendingTarget,
+    setPendingTarget,
     focus,
     chromeVisible,
     setFocus,
@@ -55,6 +66,16 @@ export function Reader({ book, onClose }: ReaderProps) {
     deleteAnnotation,
   } = useReader();
   const behavior = useSettings((state) => state.behavior);
+
+  // Auto-scroll is offered only by the formats that actually scroll.
+  const [autoScrolling, setAutoScrolling] = useState(false);
+  const scroller = useCallback(() => controls?.scroller?.() ?? null, [controls]);
+  useAutoScroll(scroller, behavior.autoScrollSpeed, autoScrolling, () =>
+    setAutoScrolling(false),
+  );
+  useEffect(() => {
+    if (!controls?.scroller) setAutoScrolling(false);
+  }, [controls]);
 
   const tts = useReadAloud({
     getText: async () => (await controls?.visibleText()) ?? "",
@@ -68,6 +89,14 @@ export function Reader({ book, onClose }: ReaderProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [book.id]);
 
+  // A note or a palette result asked for a specific place; the engine only
+  // exists a moment later, so the jump waits for it here.
+  useEffect(() => {
+    if (!controls || !pendingTarget || loading) return;
+    controls.goTo(pendingTarget);
+    setPendingTarget(null);
+  }, [controls, pendingTarget, loading, setPendingTarget]);
+
   // --- reading time ---------------------------------------------------------
   const banked = useRef(0);
   useEffect(() => {
@@ -78,6 +107,37 @@ export function Reader({ book, onClose }: ReaderProps) {
     }, TICK * 1000);
     return () => clearInterval(timer);
   }, [book.id]);
+
+  // --- bookmarks ------------------------------------------------------------
+  const bookmark = annotations.find(
+    (item) => item.kind === "bookmark" && item.location === (location ?? ""),
+  );
+
+  const toggleBookmark = useCallback(async () => {
+    const current = useReader.getState();
+    const here = current.location;
+    const existing = current.annotations.find(
+      (item) => item.kind === "bookmark" && item.location === (here ?? ""),
+    );
+    try {
+      if (existing) {
+        await deleteAnnotation(existing.id);
+        toast.info("Bookmark removed.");
+        return;
+      }
+      if (!here) return;
+      await saveAnnotation({
+        bookId: book.id,
+        kind: "bookmark",
+        location: here,
+        chapter: current.chapter,
+        page: Number.isFinite(Number(here)) ? Number(here) + 1 : null,
+      });
+      toast.success("Bookmarked.");
+    } catch (err) {
+      toast.error(errorText(err));
+    }
+  }, [book.id, deleteAnnotation, saveAnnotation]);
 
   // --- keyboard -------------------------------------------------------------
   const handleKey = useCallback(
@@ -111,6 +171,16 @@ export function Reader({ book, onClose }: ReaderProps) {
         case "n":
           setPanel("notes");
           break;
+        case "b":
+          void toggleBookmark();
+          break;
+        case "+":
+        case "=":
+          resizeText(1);
+          break;
+        case "-":
+          resizeText(-1);
+          break;
         case "/":
           event.preventDefault();
           setPanel("search");
@@ -119,39 +189,13 @@ export function Reader({ book, onClose }: ReaderProps) {
           break;
       }
     },
-    [controls, onClose, setFocus, setPanel],
+    [controls, onClose, setFocus, setPanel, toggleBookmark],
   );
 
   useEffect(() => {
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, [handleKey]);
-
-  // --- bookmarks ------------------------------------------------------------
-  const bookmark = annotations.find(
-    (item) => item.kind === "bookmark" && item.location === (location ?? ""),
-  );
-
-  const toggleBookmark = async () => {
-    try {
-      if (bookmark) {
-        await deleteAnnotation(bookmark.id);
-        toast.info("Bookmark removed.");
-        return;
-      }
-      if (!location) return;
-      await saveAnnotation({
-        bookId: book.id,
-        kind: "bookmark",
-        location,
-        chapter,
-        page: Number.isFinite(Number(location)) ? Number(location) + 1 : null,
-      });
-      toast.success("Bookmarked.");
-    } catch (err) {
-      toast.error(errorText(err));
-    }
-  };
 
   // A tap in the middle reveals the chrome; the outer thirds turn pages.
   const onSurfaceClick = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -206,6 +250,11 @@ export function Reader({ book, onClose }: ReaderProps) {
             ttsActive={tts.speaking}
             bookmarked={Boolean(bookmark)}
             onBookmark={toggleBookmark}
+            autoScroll={
+              controls?.scroller
+                ? { running: autoScrolling, toggle: () => setAutoScrolling((value) => !value) }
+                : undefined
+            }
           />
         ) : null}
         {showChrome ? <ReaderBottomBar key="bottom" /> : null}

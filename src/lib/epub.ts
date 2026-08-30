@@ -72,7 +72,11 @@ export interface EpubBook {
     cfiFromPercentage: (percentage: number) => string;
     length: () => number;
   };
-  spine: { each: (fn: (item: EpubSpineItem) => void) => void };
+  spine: {
+    each: (fn: (item: EpubSpineItem) => void) => void;
+    /** Resolves an href from the table of contents to its spine section. */
+    get: (target: string) => { index: number; cfiBase: string } | undefined;
+  };
   load: (path: string) => Promise<unknown>;
   renderTo: (element: HTMLElement, options: Record<string, unknown>) => EpubRendition;
   destroy: () => void;
@@ -95,4 +99,40 @@ export function flattenToc(
 export function sameDocument(a: string, b: string): boolean {
   const strip = (value: string) => value.split("#")[0].replace(/^\.?\//, "");
   return strip(a) === strip(b);
+}
+
+/**
+ * Where each chapter falls along the progress bar, as fractions of the book.
+ *
+ * epub.js reports progress from its generated locations table, so chapter marks
+ * have to be derived from the same table or they would not line up. A location
+ * CFI begins with its section's `cfiBase`, which is enough to find the first
+ * location of every chapter. The result is only returned when it comes out
+ * strictly increasing — a wrong mark is worse than no mark.
+ */
+export function chapterMarks(
+  book: EpubBook,
+  toc: Array<{ target: string }>,
+): number[] {
+  try {
+    const locations: string[] = JSON.parse(book.locations.save());
+    if (locations.length < 2 || !toc.length) return [];
+
+    const marks: number[] = [];
+    for (const item of toc) {
+      const href = item.target.split("#")[0];
+      const section = book.spine.get(href);
+      if (!section) return [];
+      const prefix = `epubcfi(${section.cfiBase}`;
+      const at = locations.findIndex((cfi) => cfi.startsWith(prefix));
+      if (at === -1) continue;
+      marks.push(at / (locations.length - 1));
+    }
+
+    const unique = [...new Set(marks)].sort((a, b) => a - b);
+    const usable = unique.filter((value) => value > 0.001 && value < 0.999);
+    return usable.length >= 2 ? usable : [];
+  } catch {
+    return [];
+  }
 }

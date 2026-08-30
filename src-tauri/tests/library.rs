@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use folio_lib::db::models::AnnotationInput;
-use folio_lib::db::{annotations, books, collections, settings, stats, Db};
+use folio_lib::db::{annotations, books, collections, settings, stats, Db, MIGRATIONS};
 use folio_lib::formats::{self, comic, Format};
 use folio_lib::library;
 use folio_lib::paths::AppPaths;
@@ -235,6 +235,7 @@ fn progress_annotations_and_deletion_round_trip() {
             text: Some("In the hour before dawn".into()),
             note: None,
             color: Some("#f5b642".into()),
+            data: None,
         },
     )
     .unwrap();
@@ -253,6 +254,7 @@ fn progress_annotations_and_deletion_round_trip() {
             text: saved.text.clone(),
             note: Some("Look this up".into()),
             color: saved.color.clone(),
+            data: None,
         },
     )
     .unwrap();
@@ -320,6 +322,7 @@ fn sync_folder_carries_reading_state_to_another_device() {
             text: Some("the sea".into()),
             note: None,
             color: Some("#5ec9a0".into()),
+            data: Some(r#"{"rects":[[0.1,0.2,0.3,0.02]]}"#.into()),
         },
     )
     .unwrap();
@@ -373,4 +376,150 @@ fn book_path_resolves_format_and_reports_missing_files() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("missing"), "readable message: {error}");
+}
+
+#[test]
+fn v1_databases_upgrade_without_losing_anything() {
+    // A database created by Folio 0.1 must survive the v2 upgrade with its rows
+    // intact and its new columns defaulted — this is the migration users hit.
+    let scratch = Scratch::new("migrate");
+    let path = scratch.path().join("library.db");
+
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.execute_batch("PRAGMA user_version = 1").unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, format, file_name, file_size, hash, added_at, updated_at)
+             VALUES ('abc', 'Old Book', 'epub', 'abc.epub', 10, 'abchash', 100, 100)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO annotations (id, book_id, kind, location, created_at, updated_at)
+             VALUES ('n1', 'abc', 'highlight', 'epubcfi(/6/4)', 100, 100)",
+            [],
+        )
+        .unwrap();
+    }
+
+    let db = Db::open(&path).expect("v1 database upgrades");
+    let conn = db.0.lock();
+
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version as usize, MIGRATIONS.len(), "migrated to the latest");
+
+    let book = books::get(&conn, "abc").expect("the old book is still there");
+    assert_eq!(book.title, "Old Book");
+    assert!(!book.favorite, "new column defaults to not favourite");
+
+    let notes = annotations::list_for_book(&conn, "abc").unwrap();
+    assert_eq!(notes.len(), 1, "the old highlight survived");
+    assert_eq!(notes[0].data, None, "new payload column defaults to empty");
+
+    // Opening again must be a no-op rather than re-running the ALTERs.
+    drop(conn);
+    drop(db);
+    Db::open(&path).expect("reopening an up-to-date database is safe");
+}
+
+#[test]
+fn favorite_and_finished_travel_between_devices() {
+    // Before v0.2 neither of these synced: a book marked finished on the laptop
+    // still looked unread on the phone.
+    let laptop = fixture("state-laptop");
+    let phone = fixture("state-phone");
+    let folder = laptop._scratch.path().join("shared");
+
+    let laptop_conn = laptop.db.0.lock();
+    let phone_conn = phone.db.0.lock();
+    let source = laptop.source.join("lamplighter.epub");
+    let on_laptop = library::import_one(&laptop_conn, &laptop.paths, &source).unwrap();
+    let on_phone = library::import_one(&phone_conn, &phone.paths, &source).unwrap();
+
+    books::set_favorite(&laptop_conn, &on_laptop.id, true).unwrap();
+    books::set_finished(&laptop_conn, &on_laptop.id, true).unwrap();
+
+    sync::sync(&laptop_conn, &folder).unwrap();
+    sync::sync(&phone_conn, &folder).unwrap();
+
+    let arrived = books::get(&phone_conn, &on_phone.id).unwrap();
+    assert!(arrived.favorite, "favourite crossed over");
+    assert!(arrived.finished_at.is_some(), "finished crossed over");
+
+    // Un-favouriting later on the phone must win back on the laptop.
+    books::set_favorite(&phone_conn, &on_phone.id, false).unwrap();
+    sync::sync(&phone_conn, &folder).unwrap();
+    sync::sync(&laptop_conn, &folder).unwrap();
+    assert!(
+        !books::get(&laptop_conn, &on_laptop.id).unwrap().favorite,
+        "the newer edit wins"
+    );
+}
+
+#[test]
+fn pdf_highlight_payloads_survive_a_sync_round_trip() {
+    let laptop = fixture("data-laptop");
+    let phone = fixture("data-phone");
+    let folder = laptop._scratch.path().join("shared");
+
+    let laptop_conn = laptop.db.0.lock();
+    let phone_conn = phone.db.0.lock();
+    let source = laptop.source.join("lamplighter.epub");
+    let on_laptop = library::import_one(&laptop_conn, &laptop.paths, &source).unwrap();
+    library::import_one(&phone_conn, &phone.paths, &source).unwrap();
+
+    let rects = r#"{"rects":[[0.12,0.34,0.5,0.02]]}"#;
+    annotations::save(
+        &laptop_conn,
+        &AnnotationInput {
+            id: None,
+            book_id: on_laptop.id.clone(),
+            kind: "highlight".into(),
+            location: "7".into(),
+            location_end: None,
+            page: Some(7),
+            chapter: None,
+            text: Some("a marked sentence".into()),
+            note: None,
+            color: Some("#66aee6".into()),
+            data: Some(rects.into()),
+        },
+    )
+    .unwrap();
+
+    sync::sync(&laptop_conn, &folder).unwrap();
+    sync::sync(&phone_conn, &folder).unwrap();
+
+    let arrived = annotations::list_for_book(&phone_conn, &on_laptop.id).unwrap();
+    assert_eq!(arrived.len(), 1);
+    assert_eq!(
+        arrived[0].data.as_deref(),
+        Some(rects),
+        "the rectangles a PDF highlight needs are carried across"
+    );
+}
+
+#[test]
+fn stats_report_longest_streak_and_per_book_time() {
+    let f = fixture("stats-deep");
+    let conn = f.db.0.lock();
+    let epub = library::import_one(&conn, &f.paths, &f.source.join("lamplighter.epub")).unwrap();
+    let comic = library::import_one(&conn, &f.paths, &f.source.join("comic.cbz")).unwrap();
+
+    stats::record_session(&conn, &epub.id, 600).unwrap();
+    stats::record_session(&conn, &comic.id, 120).unwrap();
+
+    let summary = stats::library_stats(&conn).unwrap();
+    assert_eq!(summary.seconds_today, 720);
+    assert_eq!(summary.longest_streak, 1);
+    assert_eq!(summary.daily.len(), 371, "a full year of columns to draw");
+    assert_eq!(summary.per_book.len(), 2);
+    assert_eq!(summary.per_book[0].book_id, epub.id, "sorted by time spent");
+    assert_eq!(summary.per_book[0].seconds, 600);
+
+    books::set_favorite(&conn, &comic.id, true).unwrap();
+    assert_eq!(stats::library_stats(&conn).unwrap().favorite_books, 1);
 }

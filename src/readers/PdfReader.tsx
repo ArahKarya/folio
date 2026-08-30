@@ -1,7 +1,11 @@
 import * as pdfjs from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { PdfPage, type PageBox } from "./pdf/PdfPage";
+import { encodeRects, rectsFromSelection } from "./pdf/highlights";
+import { SelectionMenu, type PendingSelection } from "@/components/reader/SelectionMenu";
 import { LoadingScreen } from "@/components/ui/Spinner";
+import { toast } from "@/components/ui/Toast";
 import { bookAssetUrl, errorText, ipc } from "@/lib/ipc";
 import { pageProgress } from "@/lib/utils";
 import { useReader } from "@/store/reader";
@@ -11,13 +15,6 @@ import type { Book, SearchHit } from "@/types";
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
 type PdfDocument = pdfjs.PDFDocumentProxy;
-
-interface PageBox {
-  index: number;
-  /** Intrinsic size at scale 1, used to reserve space before rendering. */
-  width: number;
-  height: number;
-}
 
 interface PdfReaderProps {
   book: Book;
@@ -30,8 +27,19 @@ export function PdfReader({ book }: PdfReaderProps) {
   const taskRef = useRef<pdfjs.PDFDocumentLoadingTask | null>(null);
   const [pages, setPages] = useState<PageBox[]>([]);
   const [zoom, setZoom] = useState(1);
+  const [selection, setSelection] = useState<(PendingSelection & { page: number }) | null>(null);
   const { typography } = useSettings();
-  const { setToc, setControls, setLoading, setError, reportPosition, setChapter } = useReader();
+  const annotations = useReader((state) => state.annotations);
+  const {
+    setToc,
+    setControls,
+    setLoading,
+    setError,
+    reportPosition,
+    setChapter,
+    saveAnnotation,
+    setPanel,
+  } = useReader();
 
   useEffect(() => {
     let cancelled = false;
@@ -89,13 +97,7 @@ export function PdfReader({ book }: PdfReaderProps) {
     const element = scroller.current;
     if (!element || !pages.length) return;
     const onScroll = () => {
-      const marker = element.scrollTop + element.clientHeight * 0.33;
-      const nodes = element.querySelectorAll<HTMLElement>("[data-page]");
-      let current = 1;
-      for (const node of nodes) {
-        if (node.offsetTop <= marker) current = Number(node.dataset.page);
-        else break;
-      }
+      const current = pageAtMarker(element);
       setChapter(`Page ${current} of ${pages.length}`);
       reportPosition(pageProgress(current - 1, pages.length), String(current));
     };
@@ -138,36 +140,112 @@ export function PdfReader({ book }: PdfReaderProps) {
         const doc = docRef.current;
         const element = scroller.current;
         if (!doc || !element) return "";
-        const marker = element.scrollTop + element.clientHeight * 0.33;
-        const nodes = element.querySelectorAll<HTMLElement>("[data-page]");
-        let current = 1;
-        for (const node of nodes) {
-          if (node.offsetTop <= marker) current = Number(node.dataset.page);
-          else break;
-        }
-        const page = await doc.getPage(current);
+        const page = await doc.getPage(pageAtMarker(element));
         const content = await page.getTextContent();
         return content.items.map((item) => ("str" in item ? item.str : "")).join(" ");
       },
       search,
+      scroller: () => scroller.current,
     });
     return () => setControls(null);
   }, [setControls, search]);
 
+  /**
+   * A selection only becomes a highlight once we know which page it belongs
+   * to, because the geometry is measured against that page's element.
+   */
+  const onMouseUp = () => {
+    const active = window.getSelection();
+    const text = active?.toString().trim();
+    if (!text || !active?.rangeCount) {
+      setSelection(null);
+      return;
+    }
+    const node = active.getRangeAt(0).startContainer;
+    const element = (node.nodeType === 1 ? node : node.parentElement) as HTMLElement | null;
+    const pageElement = element?.closest<HTMLElement>("[data-page]");
+    if (!pageElement) {
+      setSelection(null);
+      return;
+    }
+    const rect = active.getRangeAt(0).getBoundingClientRect();
+    setSelection({
+      cfi: pageElement.dataset.page ?? "1",
+      page: Number(pageElement.dataset.page ?? 1),
+      text,
+      x: rect.left + rect.width / 2,
+      y: rect.top,
+    });
+  };
+
+  const createHighlight = async (color: string, note: string | null) => {
+    const active = window.getSelection();
+    if (!selection || !active) return;
+    const pageElement = scroller.current?.querySelector<HTMLElement>(
+      `[data-page="${selection.page}"]`,
+    );
+    if (!pageElement) return;
+
+    const rects = rectsFromSelection(active, pageElement);
+    if (!rects.length) {
+      toast.error("That selection could not be measured — try selecting it again.");
+      return;
+    }
+
+    try {
+      await saveAnnotation({
+        bookId: book.id,
+        kind: note ? "note" : "highlight",
+        location: String(selection.page),
+        page: selection.page,
+        chapter: `Page ${selection.page}`,
+        text: selection.text,
+        note,
+        color,
+        data: encodeRects(rects),
+      });
+      setSelection(null);
+      active.removeAllRanges();
+      toast.success(note ? "Note saved." : "Highlighted.");
+    } catch (error) {
+      toast.error(errorText(error));
+    }
+  };
+
   if (!pages.length) return <LoadingScreen message="Opening the document…" />;
 
   return (
-    <div ref={scroller} className="reader-surface h-full w-full overflow-y-auto overscroll-contain">
+    <>
       <div
-        className="mx-auto flex flex-col items-center gap-4 py-6"
-        style={{ paddingInline: `${typography.margin}%` }}
+        ref={scroller}
+        data-pdf-scroller
+        onMouseUp={onMouseUp}
+        className="reader-surface h-full w-full overflow-y-auto overscroll-contain"
       >
-        {pages.map((page) => (
-          <PdfPage key={page.index} page={page} zoom={zoom} doc={docRef} />
-        ))}
+        <div
+          className="mx-auto flex flex-col items-center gap-4 py-6"
+          style={{ paddingInline: `${typography.margin}%` }}
+        >
+          {pages.map((page) => (
+            <PdfPage
+              key={page.index}
+              page={page}
+              zoom={zoom}
+              doc={docRef}
+              annotations={annotations}
+              onHighlightClick={() => setPanel("notes")}
+            />
+          ))}
+        </div>
+        <ZoomBar zoom={zoom} onZoom={setZoom} />
       </div>
-      <ZoomBar zoom={zoom} onZoom={setZoom} />
-    </div>
+
+      <SelectionMenu
+        selection={selection}
+        onDismiss={() => setSelection(null)}
+        onHighlight={createHighlight}
+      />
+    </>
   );
 }
 
@@ -199,84 +277,16 @@ function ZoomBar({ zoom, onZoom }: { zoom: number; onZoom: (value: number) => vo
   );
 }
 
-interface PdfPageProps {
-  page: PageBox;
-  zoom: number;
-  doc: React.RefObject<PdfDocument | null>;
-}
-
-/**
- * Renders only while on or near the screen. A 900-page PDF holds 900 empty
- * boxes and at most a handful of canvases.
- */
-function PdfPage({ page, zoom, doc }: PdfPageProps) {
-  const host = useRef<HTMLDivElement>(null);
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const [visible, setVisible] = useState(false);
-
-  useEffect(() => {
-    const element = host.current;
-    if (!element) return;
-    const observer = new IntersectionObserver(
-      (entries) => setVisible(entries[0].isIntersecting),
-      { root: element.closest(".overflow-y-auto"), rootMargin: "1200px 0px" },
-    );
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    if (!visible) return;
-    let cancelled = false;
-    let task: pdfjs.RenderTask | null = null;
-
-    const render = async () => {
-      const document = doc.current;
-      const target = canvas.current;
-      if (!document || !target) return;
-      const pdfPage = await document.getPage(page.index);
-      if (cancelled) return;
-      const ratio = Math.min(window.devicePixelRatio || 1, 2);
-      const viewport = pdfPage.getViewport({ scale: zoom * ratio });
-      target.width = viewport.width;
-      target.height = viewport.height;
-      const context = target.getContext("2d");
-      if (!context) return;
-      task = pdfPage.render({ canvas: target, canvasContext: context, viewport });
-      try {
-        await task.promise;
-      } catch {
-        /* superseded by a newer render */
-      }
-    };
-
-    void render();
-    return () => {
-      cancelled = true;
-      task?.cancel();
-    };
-  }, [visible, zoom, page.index, doc]);
-
-  const width = page.width * zoom;
-  const height = page.height * zoom;
-
-  return (
-    <div
-      ref={host}
-      data-page={page.index}
-      style={{ width, height }}
-      className="relative w-full max-w-full shadow-[var(--shadow)]"
-    >
-      {visible ? (
-        <canvas ref={canvas} style={{ width, height }} className="block bg-white" />
-      ) : (
-        <div className="h-full w-full bg-white/80" />
-      )}
-      <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[11px] text-dim">
-        {page.index}
-      </span>
-    </div>
-  );
+/** The page sitting under the top third of the viewport. */
+function pageAtMarker(element: HTMLElement): number {
+  const marker = element.scrollTop + element.clientHeight * 0.33;
+  const nodes = element.querySelectorAll<HTMLElement>("[data-page]");
+  let current = 1;
+  for (const node of nodes) {
+    if (node.offsetTop <= marker) current = Number(node.dataset.page);
+    else break;
+  }
+  return current;
 }
 
 function scrollToPage(element: HTMLElement | null, pageNumber: number) {

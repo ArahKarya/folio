@@ -7,7 +7,7 @@ use crate::error::{AppError, AppResult};
 
 const SELECT: &str = "SELECT b.id, b.title, b.author, b.format, b.file_name, b.file_size, b.hash,
         b.language, b.publisher, b.description, b.series, b.series_index, b.cover, b.page_count,
-        b.added_at, b.last_opened_at, b.finished_at, b.updated_at,
+        b.added_at, b.last_opened_at, b.finished_at, b.favorite, b.updated_at,
         COALESCE(p.percent, 0.0), p.location
    FROM books b LEFT JOIN progress p ON p.book_id = b.id";
 
@@ -30,9 +30,10 @@ fn row_to_book(row: &Row) -> rusqlite::Result<Book> {
         added_at: row.get(14)?,
         last_opened_at: row.get(15)?,
         finished_at: row.get(16)?,
-        updated_at: row.get(17)?,
-        progress: row.get(18)?,
-        location: row.get(19)?,
+        favorite: row.get::<_, i64>(17)? != 0,
+        updated_at: row.get(18)?,
+        progress: row.get(19)?,
+        location: row.get(20)?,
         collections: Vec::new(),
     })
 }
@@ -93,8 +94,9 @@ pub fn insert(conn: &Connection, book: &Book) -> AppResult<()> {
     conn.execute(
         "INSERT INTO books (id, title, author, format, file_name, file_size, hash, language,
              publisher, description, series, series_index, cover, page_count, added_at,
-             last_opened_at, finished_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, NULL, NULL, ?16)",
+             last_opened_at, finished_at, favorite, state_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, NULL, NULL,
+                 0, 0, ?16)",
         params![
             book.id,
             book.title,
@@ -167,11 +169,25 @@ pub fn touch_opened(conn: &Connection, id: &str) -> AppResult<()> {
 pub fn set_finished(conn: &Connection, id: &str, finished: bool) -> AppResult<Book> {
     let now = now_ms();
     conn.execute(
-        "UPDATE books SET finished_at = ?2, updated_at = ?3 WHERE id = ?1",
+        "UPDATE books SET finished_at = ?2, updated_at = ?3, state_at = ?3 WHERE id = ?1",
         params![id, if finished { Some(now) } else { None }, now],
     )?;
     if finished {
         set_progress(conn, id, 1.0, None)?;
+    }
+    get(conn, id)
+}
+
+/// Favourite is book state rather than catalogue metadata, so it shares the
+/// `state_at` stamp with "finished" and travels through folder sync.
+pub fn set_favorite(conn: &Connection, id: &str, favorite: bool) -> AppResult<Book> {
+    let now = now_ms();
+    let changed = conn.execute(
+        "UPDATE books SET favorite = ?2, updated_at = ?3, state_at = ?3 WHERE id = ?1",
+        params![id, i64::from(favorite), now],
+    )?;
+    if changed == 0 {
+        return Err(AppError::BookMissing);
     }
     get(conn, id)
 }

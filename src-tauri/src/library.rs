@@ -86,6 +86,7 @@ pub fn import_one(conn: &Connection, paths: &AppPaths, source: &Path) -> AppResu
         added_at: now,
         last_opened_at: None,
         finished_at: None,
+        favorite: false,
         updated_at: now,
         progress: 0.0,
         location: None,

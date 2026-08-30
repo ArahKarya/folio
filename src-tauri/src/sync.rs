@@ -22,6 +22,10 @@ pub struct Bundle {
     pub version: u32,
     #[serde(default)]
     pub progress: Vec<ProgressRow>,
+    /// Favourite and finished. Without this section, marking a book finished on
+    /// one device left every other device still showing it as unread.
+    #[serde(default)]
+    pub book_state: Vec<BookStateRow>,
     #[serde(default)]
     pub annotations: Vec<AnnotationRow>,
     #[serde(default)]
@@ -43,6 +47,15 @@ pub struct ProgressRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BookStateRow {
+    pub book_id: String,
+    pub favorite: bool,
+    pub finished_at: Option<i64>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AnnotationRow {
     pub id: String,
     pub book_id: String,
@@ -54,6 +67,8 @@ pub struct AnnotationRow {
     pub text: Option<String>,
     pub note: Option<String>,
     pub color: Option<String>,
+    #[serde(default)]
+    pub data: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
     pub deleted_at: Option<i64>,
@@ -138,11 +153,31 @@ pub fn export(conn: &Connection) -> AppResult<Bundle> {
         }
     }
 
+    let mut book_state = Vec::new();
+    {
+        // Only books whose state has actually been touched are published; the
+        // default zero stamp would otherwise lose every real edit on merge.
+        let mut stmt = conn.prepare(
+            "SELECT id, favorite, finished_at, state_at FROM books WHERE state_at > 0",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(BookStateRow {
+                book_id: r.get(0)?,
+                favorite: r.get::<_, i64>(1)? != 0,
+                finished_at: r.get(2)?,
+                updated_at: r.get(3)?,
+            })
+        })?;
+        for row in rows {
+            book_state.push(row?);
+        }
+    }
+
     let mut annotations = Vec::new();
     {
         let mut stmt = conn.prepare(
             "SELECT id, book_id, kind, location, location_end, page, chapter, text, note, color,
-                    created_at, updated_at, deleted_at FROM annotations",
+                    data, created_at, updated_at, deleted_at FROM annotations",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(AnnotationRow {
@@ -156,9 +191,10 @@ pub fn export(conn: &Connection) -> AppResult<Bundle> {
                 text: r.get(7)?,
                 note: r.get(8)?,
                 color: r.get(9)?,
-                created_at: r.get(10)?,
-                updated_at: r.get(11)?,
-                deleted_at: r.get(12)?,
+                data: r.get(10)?,
+                created_at: r.get(11)?,
+                updated_at: r.get(12)?,
+                deleted_at: r.get(13)?,
             })
         })?;
         for row in rows {
@@ -223,6 +259,7 @@ pub fn export(conn: &Connection) -> AppResult<Bundle> {
     Ok(Bundle {
         version: 1,
         progress,
+        book_state,
         annotations,
         collections,
         memberships,
@@ -268,6 +305,31 @@ pub fn apply(conn: &Connection, bundle: &Bundle) -> AppResult<SyncReport> {
         }
     }
 
+    for row in &bundle.book_state {
+        if !has_book(&row.book_id) {
+            report.skipped_unknown_books += 1;
+            continue;
+        }
+        let local: i64 = conn.query_row(
+            "SELECT state_at FROM books WHERE id = ?1",
+            params![row.book_id],
+            |r| r.get(0),
+        )?;
+        if local < row.updated_at {
+            conn.execute(
+                "UPDATE books SET favorite = ?2, finished_at = ?3, state_at = ?4, updated_at = ?4
+                 WHERE id = ?1",
+                params![
+                    row.book_id,
+                    i64::from(row.favorite),
+                    row.finished_at,
+                    row.updated_at
+                ],
+            )?;
+            report.applied += 1;
+        }
+    }
+
     for row in &bundle.annotations {
         if !has_book(&row.book_id) {
             report.skipped_unknown_books += 1;
@@ -283,11 +345,11 @@ pub fn apply(conn: &Connection, bundle: &Bundle) -> AppResult<SyncReport> {
         if local.unwrap_or(0) < row.updated_at {
             conn.execute(
                 "INSERT INTO annotations (id, book_id, kind, location, location_end, page, chapter,
-                     text, note, color, created_at, updated_at, deleted_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                     text, note, color, data, created_at, updated_at, deleted_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                  ON CONFLICT(id) DO UPDATE SET location = ?4, location_end = ?5, page = ?6,
-                     chapter = ?7, text = ?8, note = ?9, color = ?10, updated_at = ?12,
-                     deleted_at = ?13",
+                     chapter = ?7, text = ?8, note = ?9, color = ?10, data = ?11, updated_at = ?13,
+                     deleted_at = ?14",
                 params![
                     row.id,
                     row.book_id,
@@ -299,6 +361,7 @@ pub fn apply(conn: &Connection, bundle: &Bundle) -> AppResult<SyncReport> {
                     row.text,
                     row.note,
                     row.color,
+                    row.data,
                     row.created_at,
                     row.updated_at,
                     row.deleted_at,
@@ -395,6 +458,12 @@ fn merge(local: Bundle, remote: Bundle) -> Bundle {
         progress: combine(
             local.progress,
             remote.progress,
+            |r| r.book_id.clone(),
+            |r| r.updated_at,
+        ),
+        book_state: combine(
+            local.book_state,
+            remote.book_state,
             |r| r.book_id.clone(),
             |r| r.updated_at,
         ),

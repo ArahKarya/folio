@@ -4,6 +4,7 @@ import { LoadingScreen } from "@/components/ui/Spinner";
 import { toast } from "@/components/ui/Toast";
 import { errorText, ipc } from "@/lib/ipc";
 import { bookCss } from "@/lib/theme";
+import { pageTransitionCss } from "@/lib/transitions";
 import { pageProgress } from "@/lib/utils";
 import { useReader } from "@/store/reader";
 import { useSettings } from "@/store/settings";
@@ -29,7 +30,7 @@ export function DocReader({ book }: DocReaderProps) {
   const [selection, setSelection] = useState<PendingSelection | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
 
-  const { theme, typography } = useSettings();
+  const { activeTheme, accent, typography, behavior } = useSettings();
   const { setControls, setLoading, setError, reportPosition, setChapter, saveAnnotation } =
     useReader();
 
@@ -76,7 +77,7 @@ export function DocReader({ book }: DocReaderProps) {
     const total = Math.max(1, Math.round(element.scrollWidth / (columnWidth + COLUMN_GAP)));
     setPageCount(total);
     setPage((current) => Math.min(current, total - 1));
-  }, [html, size, columnWidth, typography, theme]);
+  }, [html, size, columnWidth, typography, activeTheme]);
 
   // Restore the saved page once, after the first successful measurement.
   const restored = useRef(false);
@@ -178,7 +179,7 @@ export function DocReader({ book }: DocReaderProps) {
       >
         {/* The book stylesheet is written for a document body, so it is
             re-scoped to this container rather than duplicated. */}
-        <style>{bookCss(theme, typography).replace(/(^|\s|,)(body|:root)\b/g, "$1.doc-page")}</style>
+        <style>{bookCss(activeTheme, typography, accent).replace(/(^|\s|,)(body|:root)\b/g, "$1.doc-page")}</style>
         <div
           ref={content}
           data-selectable
@@ -191,7 +192,7 @@ export function DocReader({ book }: DocReaderProps) {
             columnGap: `${COLUMN_GAP}px`,
             columnFill: "auto",
             transform: `translateX(-${page * (columnWidth + COLUMN_GAP)}px)`,
-            transition: "transform .28s cubic-bezier(.16,1,.3,1)",
+            transition: pageTransitionCss(behavior.pageTransition),
           }}
           dangerouslySetInnerHTML={{ __html: html }}
         />

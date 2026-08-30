@@ -98,9 +98,11 @@ export function ComicReader({ book }: ComicReaderProps) {
       prev: () => go(-step),
       goTo: (target) => setPage(Math.min(Math.max(Number(target) || 0, 0), Math.max(count - 1, 0))),
       visibleText: async () => "",
+      // Only the vertical strip scrolls; paged modes turn instead.
+      scroller: behavior.comicMode === "strip" ? () => strip.current : undefined,
     });
     return () => setControls(null);
-  }, [setControls, go, step, count]);
+  }, [setControls, go, step, count, behavior.comicMode]);
 
   const fit = useMemo(() => {
     switch (behavior.comicFit) {

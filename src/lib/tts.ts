@@ -16,6 +16,11 @@ export interface ReadAloud {
   stop: () => void;
   toggle: () => void;
   togglePause: () => void;
+  /** Minutes chosen for the sleep timer, or null when it is off. */
+  sleepMinutes: number | null;
+  setSleep: (minutes: number | null) => void;
+  /** Seconds left before reading stops itself. */
+  sleepLeft: number;
 }
 
 /**
@@ -27,6 +32,8 @@ export function useReadAloud({ getText, next, rate }: ReadAloudOptions): ReadAlo
   const supported = typeof window !== "undefined" && "speechSynthesis" in window;
   const [speaking, setSpeaking] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [sleepMinutes, setSleepMinutes] = useState<number | null>(null);
+  const [sleepLeft, setSleepLeft] = useState(0);
   const active = useRef(false);
   const emptyPages = useRef(0);
 
@@ -36,6 +43,8 @@ export function useReadAloud({ getText, next, rate }: ReadAloudOptions): ReadAlo
     if (supported) window.speechSynthesis.cancel();
     setSpeaking(false);
     setPaused(false);
+    setSleepMinutes(null);
+    setSleepLeft(0);
   }, [supported]);
 
   const speakCurrent = useCallback(async () => {
@@ -93,8 +102,40 @@ export function useReadAloud({ getText, next, rate }: ReadAloudOptions): ReadAlo
     else start();
   }, [start, stop]);
 
+  const setSleep = useCallback((minutes: number | null) => {
+    setSleepMinutes(minutes);
+    setSleepLeft(minutes ? minutes * 60 : 0);
+  }, []);
+
+  // The countdown only runs while speech is actually playing, so pausing to
+  // answer the door does not eat into the timer.
+  useEffect(() => {
+    if (!sleepMinutes || !speaking || paused) return;
+    const timer = setInterval(() => {
+      setSleepLeft((left) => {
+        if (left <= 1) {
+          stop();
+          return 0;
+        }
+        return left - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [sleepMinutes, speaking, paused, stop]);
+
   // Speech keeps running after a component unmounts unless it is cancelled.
   useEffect(() => stop, [stop]);
 
-  return { supported, speaking, paused, start, stop, toggle, togglePause };
+  return {
+    supported,
+    speaking,
+    paused,
+    start,
+    stop,
+    toggle,
+    togglePause,
+    sleepMinutes,
+    setSleep,
+    sleepLeft,
+  };
 }

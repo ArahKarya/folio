@@ -22,6 +22,7 @@ pub struct Book {
     pub added_at: i64,
     pub last_opened_at: Option<i64>,
     pub finished_at: Option<i64>,
+    pub favorite: bool,
     pub updated_at: i64,
     /// 0.0 – 1.0
     pub progress: f64,
@@ -57,6 +58,9 @@ pub struct Annotation {
     pub text: Option<String>,
     pub note: Option<String>,
     pub color: Option<String>,
+    /// Format-specific payload as JSON — currently the normalised rectangles
+    /// that let a PDF highlight be redrawn at any zoom level.
+    pub data: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -74,6 +78,7 @@ pub struct AnnotationInput {
     pub text: Option<String>,
     pub note: Option<String>,
     pub color: Option<String>,
+    pub data: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,16 +99,28 @@ pub struct DailyStat {
     pub seconds: i64,
 }
 
+/// Time spent in one book, for the stats breakdown.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookTime {
+    pub book_id: String,
+    pub seconds: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryStats {
     pub total_books: i64,
     pub finished_books: i64,
     pub reading_books: i64,
+    pub favorite_books: i64,
     pub seconds_total: i64,
     pub seconds_this_week: i64,
+    pub seconds_today: i64,
     pub streak_days: i64,
+    pub longest_streak: i64,
     pub daily: Vec<DailyStat>,
+    pub per_book: Vec<BookTime>,
 }
 
 /// Result of an import run; partial failures are reported rather than thrown so
