@@ -1,13 +1,27 @@
-# Folio
+<div align="center">
 
-A calm, multi-format reading app for Linux, macOS, Windows and Android — one
+# Folio — Calm, Cross-Platform Reading
+
+**One codebase, every format — EPUB, PDF, comics and MOBI, in sync across your devices.**
+
+[![Status](https://img.shields.io/badge/Status-Active%20Development-16C79A?style=flat-square)](https://github.com/ArahKarya/folio)
+[![License](https://img.shields.io/badge/License-MIT-0F3460?style=flat-square)](LICENSE)
+
+[![Stack](https://img.shields.io/badge/Tauri%202-React%2019%20%2B%20Rust-0F3460?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
+[![Platforms](https://img.shields.io/badge/Linux%20%C2%B7%20macOS%20%C2%B7%20Windows%20%C2%B7%20Android-FF6F61?style=flat-square)](#running-it)
+
+</div>
+
+> A product of **Arah Karya Sinergi (AKS)**.
+
+Folio is a calm, multi-format reading app for Linux, macOS, Windows and Android — one
 codebase, built on [Tauri 2](https://tauri.app), React 19 and Rust.
 
-Folio reads **EPUB**, **PDF**, **CBZ/CBR comics** and **MOBI**, keeps a visual
-library with covers and collections, saves highlights and notes, and carries your
-reading position between devices through a folder you already sync.
+Folio reads **EPUB**, **PDF**, **CBZ/CBR comics** and **MOBI**, keeps a visual library
+with covers and collections, saves highlights and notes, and carries your reading
+position between devices through a folder you already sync.
 
-## What it does
+## ✨ What it does
 
 **Library**
 - **Continue reading** at the top: the book you were last in, with a progress ring and one button
@@ -39,40 +53,7 @@ reading position between devices through a folder you already sync.
 
 **Reading stats** — a daily goal ring, current and longest streak, a year-long calendar heatmap, and which books took the most time.
 
-## Running it
-
-Requires [Node](https://nodejs.org) 20+, [pnpm](https://pnpm.io) and a
-[Rust toolchain](https://rustup.rs).
-
-```bash
-pnpm install
-pnpm app          # development, with hot reload
-pnpm app:build    # a signed-if-configured bundle for the current platform
-```
-
-Linux also needs the usual WebKitGTK build dependencies:
-
-```bash
-sudo apt install libwebkit2gtk-4.1-dev librsvg2-dev patchelf build-essential
-```
-
-`sample-books/` holds a small EPUB, PDF and CBZ used while building the app —
-handy for a first run.
-
-For Android, see [docs/ANDROID.md](docs/ANDROID.md).
-
-## Tests
-
-```bash
-cd src-tauri && cargo test      # unit + end-to-end library, reading and sync tests
-pnpm build                      # type-checks the frontend and builds it
-```
-
-The integration tests in `src-tauri/tests/library.rs` build real EPUB and CBZ
-files, import them, annotate them and sync two independent libraries through a
-folder — the same path the app takes, without the window.
-
-## How it is put together
+## 🏛️ How it is put together
 
 ```
 src/                    React 19 + TypeScript + Tailwind v4
@@ -96,24 +77,75 @@ as pixels, which is what lets a highlight made at 100% come back in exactly the
 right place at 250% or in a resized window.
 
 Rust owns the catalogue: metadata, covers, archives, the database, and sync.
-Rendering happens in the webview, where the mature engines live — epub.js for
-EPUB, pdf.js for PDF. Books are streamed to those engines over Tauri's asset
-protocol rather than pushed through IPC, so opening a 400 MB PDF does not copy
-it into JavaScript memory. Comic pages come back as binary IPC responses.
+Rendering happens in the webview, where the mature engines live — epub.js for EPUB,
+pdf.js for PDF. Books are streamed to those engines over Tauri's asset protocol rather
+than pushed through IPC, so opening a 400 MB PDF does not copy it into JavaScript
+memory. Comic pages come back as binary IPC responses.
 
-Everything Folio owns lives in the platform app-data directory, which is also
-the only path the asset protocol is allowed to serve.
+Everything Folio owns lives in the platform app-data directory, which is also the only
+path the asset protocol is allowed to serve.
 
-## Known limits
+## 🚀 Running it
 
-- **AZW3** files using the newer KF8 container may fail to open; converting them
-  to EPUB with Calibre works. Classic MOBI is supported.
-- **CBR (RAR) comics** need the `cbr` Cargo feature, which is on by default for
-  desktop and off for Android — the RAR decoder is C++ and is a cross-compile
-  hazard against the NDK. CBZ works everywhere.
+Requires [Node](https://nodejs.org) 20+, [pnpm](https://pnpm.io) and a
+[Rust toolchain](https://rustup.rs).
+
+```bash
+pnpm install
+pnpm app          # development, with hot reload
+pnpm app:build    # a signed-if-configured bundle for the current platform
+```
+
+Linux also needs the usual WebKitGTK build dependencies:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev librsvg2-dev patchelf build-essential
+```
+
+`sample-books/` holds a small EPUB, PDF and CBZ used while building the app — handy
+for a first run.
+
+For Android, see [docs/ANDROID.md](docs/ANDROID.md).
+
+## ✅ Tests
+
+```bash
+cd src-tauri && cargo test      # unit + end-to-end library, reading and sync tests
+pnpm build                      # type-checks the frontend and builds it
+```
+
+The integration tests in `src-tauri/tests/library.rs` build real EPUB and CBZ files,
+import them, annotate them and sync two independent libraries through a folder — the
+same path the app takes, without the window. `src-tauri/tests/validation.rs` covers
+path/size hardening on import and sync-bundle handling (traversal, oversized files,
+symlink-to-device, dir/file confusion).
+
+## 🧱 Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React 19, TypeScript, Tailwind v4, zustand |
+| Shell | Tauri 2 (Rust) |
+| Rendering | epub.js (EPUB), pdf.js (PDF), native comic-page decode |
+| Storage | SQLite (catalogue), folder-based sync bundle (cross-device state) |
+| Platforms | Linux, macOS, Windows, Android |
+
+## ⚠️ Known limits
+
+- **AZW3** files using the newer KF8 container may fail to open; converting them to
+  EPUB with Calibre works. Classic MOBI is supported.
+- **CBR (RAR) comics** need the `cbr` Cargo feature, which is on by default for desktop
+  and off for Android — the RAR decoder is C++ and is a cross-compile hazard against
+  the NDK. CBZ works everywhere.
 - **DRM-protected books** are not supported and will not be.
 - **Comics cannot be annotated** — there is no text to select in a page image.
 
-## Licence
+## 📜 Licence
 
-MIT.
+MIT — see [LICENSE](LICENSE).
+
+---
+
+<div align="center">
+<sub>© 2026 Arah Karya Sinergi (AKS)</sub>
+</div>
