@@ -1,24 +1,29 @@
 // Generates the source app icon (1024x1024 PNG) with no external deps.
 // Run: node scripts/make-icon.mjs   ->   app-icon.png
 // Then: pnpm tauri icon             ->   src-tauri/icons/*
+//
+// The mark is what the word "folio" means: one sheet, folded once, with a
+// bookmark tucked into the fold. It is drawn flat rather than in perspective —
+// give the far side of the fold any real width and the shape stops reading as
+// paper and starts reading as a box.
 import { deflateSync } from "node:zlib";
 import { writeFileSync } from "node:fs";
 
 const SIZE = 1024;
-const SS = 2; // supersampling factor — cheap antialiasing for the curves
+const SS = 3; // supersampling factor — antialiasing for the sloped edges
 
 const INK = [23, 19, 15];
-const INK_LIGHT = [38, 31, 25];
-const GLOW = [193, 133, 62];
-const PAGE = [244, 233, 214];
-const PAGE_SHADE = [219, 202, 175];
-const RULE = [188, 170, 143];
-const AMBER = [225, 162, 74];
+const INK_TOP = [42, 33, 26];
+const CREAM = [248, 240, 225];
+const CREAM_MID = [230, 217, 195];
+const CREAM_DEEP = [199, 184, 160];
+const AMBER = [226, 156, 60];
+const AMBER_DEEP = [166, 99, 34];
 
 const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
 
-/** Rounded-rectangle coverage test in the squircle-ish style of platform icons. */
+/** Rounded-rectangle test, in the squircle-ish style of platform icons. */
 function inRounded(x, y, x0, y0, w, h, r) {
   const dx = Math.max(x0 + r - x, x - (x0 + w - r), 0);
   const dy = Math.max(y0 + r - y, y - (y0 + h - r), 0);
@@ -35,82 +40,53 @@ function inPolygon(x, y, points) {
   return inside;
 }
 
-// An open book seen slightly from above: the two page blocks fan out from a
-// centre spine, so the silhouette reads as "book" even at 32px.
-const LEFT_PAGE = [
-  [212, 372],
-  [502, 322],
-  [502, 726],
-  [212, 686],
-];
-const RIGHT_PAGE = [
-  [522, 322],
-  [812, 372],
-  [812, 686],
-  [522, 726],
-];
-const LEFT_EDGE = [
-  [212, 686],
-  [502, 726],
-  [502, 756],
-  [212, 716],
-];
-const RIGHT_EDGE = [
-  [522, 726],
-  [812, 686],
-  [812, 716],
-  [522, 756],
-];
+const CREASE = 512;
+const SHEET = { left: 262, right: 762, top: 196, bottom: 826 };
 
-/** Text rules: shorter towards the outer edge so the pages look typeset. */
-const RULES = [];
-for (let i = 0; i < 7; i++) {
-  const t = i / 6;
-  const y = 400 + i * 44;
-  const inset = 30 + t * 18;
-  RULES.push({ side: -1, y: y - t * 8, x0: 250 + inset * 0.4, x1: 470 });
-  RULES.push({ side: 1, y: y - t * 8, x0: 554, x1: 774 - inset * 0.4 });
+/**
+ * The sheet's silhouette. Its top and bottom edges are pulled in towards the
+ * crease, the way a folded sheet pinches at the spine — that waist is the
+ * detail that reads as paper rather than as a rectangle.
+ */
+function inSheet(x, y) {
+  if (x < SHEET.left || x > SHEET.right) return false;
+  const pinch = 18 * Math.exp(-(((x - CREASE) / 88) ** 2));
+  return y > SHEET.top + pinch && y < SHEET.bottom - pinch;
 }
 
+// Bookmark ribbon, notched at the bottom, tucked against the fold. Its width
+// is set by the smallest size that matters: below about 90px here it thins to
+// a single pixel in a 32px icon and disappears.
+const RIBBON = [
+  [566, 196],
+  [664, 196],
+  [664, 446],
+  [615, 404],
+  [566, 456],
+];
+
 function colorAt(x, y) {
-  // Outside the icon shape entirely — fully transparent so `tauri icon` can
-  // apply each platform's own masking.
+  // Outside the icon shape entirely — transparent, so `tauri icon` can apply
+  // each platform's own masking.
   if (!inRounded(x, y, 0, 0, SIZE, SIZE, 224)) return null;
 
-  const vertical = clamp01(y / SIZE);
-  let color = mix(INK_LIGHT, INK, vertical);
-
-  // Warm halo behind the book, strongest just above the spine.
-  const dx = (x - 512) / 470;
-  const dy = (y - 500) / 430;
-  const halo = clamp01(1 - Math.sqrt(dx * dx + dy * dy));
-  color = mix(color, GLOW, halo * halo * 0.34);
-
-  if (inPolygon(x, y, LEFT_EDGE) || inPolygon(x, y, RIGHT_EDGE)) return PAGE_SHADE;
-
-  const onLeft = inPolygon(x, y, LEFT_PAGE);
-  const onRight = inPolygon(x, y, RIGHT_PAGE);
-  if (onLeft || onRight) {
-    // Pages darken towards the spine, which is what sells the fold.
-    const toSpine = clamp01(1 - Math.abs(x - 512) / 300);
-    let page = mix(PAGE, PAGE_SHADE, toSpine * 0.55);
-    for (const rule of RULES) {
-      const side = onLeft ? -1 : 1;
-      if (rule.side !== side) continue;
-      if (x >= rule.x0 && x <= rule.x1 && Math.abs(y - rule.y) <= 7) {
-        page = mix(page, RULE, 0.85);
-      }
-    }
-    return page;
+  if (inPolygon(x, y, RIBBON)) {
+    return mix(AMBER, AMBER_DEEP, clamp01((y - 196) / 250));
   }
 
-  // The spine itself: a warm amber wedge in the gap between the page blocks.
-  if (x > 494 && x < 530 && y > 322 && y < 792) {
-    const t = clamp01((y - 322) / 470);
-    return mix(AMBER, mix(AMBER, INK, 0.45), t);
+  if (inSheet(x, y)) {
+    const fromCrease = x - CREASE;
+    // A dark hairline with a lit edge beside it is the whole illusion of a fold.
+    if (fromCrease > 0 && fromCrease < 5) return mix(CREAM_DEEP, INK, 0.26);
+    if (fromCrease <= 0 && fromCrease > -7) return CREAM;
+    const shade = fromCrease > 0 ? 0.32 : 0.06;
+    return mix(CREAM, CREAM_MID, shade + clamp01((y - SHEET.top) / 640) * 0.22);
   }
 
-  return color;
+  // Warm ground with a halo behind the sheet.
+  const base = mix(INK_TOP, INK, clamp01(y / SIZE));
+  const halo = clamp01(1 - Math.hypot((x - 490) / 540, (y - 400) / 520));
+  return mix(base, AMBER, halo * halo * 0.26);
 }
 
 const pixels = Buffer.alloc(SIZE * SIZE * 4);
