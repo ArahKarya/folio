@@ -14,6 +14,24 @@ import type { Book, SearchHit } from "@/types";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
+/**
+ * Runtime assets pdf.js loads on demand, copied into `public/pdfjs` by
+ * `scripts/copy-pdfjs-assets.mjs`.
+ *
+ * These are not optional extras. pdf.js v6 decodes JBIG2 and JPEG2000 in
+ * WebAssembly, and without `wasmUrl` it drops those images *silently* — which
+ * is exactly how a scanned document renders with every word missing, because
+ * office scanners put the text layer in JBIG2. The font and cmap directories
+ * cover the same class of failure for non-embedded standard fonts and CJK.
+ */
+const PDF_ASSETS = {
+  wasmUrl: "/pdfjs/wasm/",
+  standardFontDataUrl: "/pdfjs/standard_fonts/",
+  cMapUrl: "/pdfjs/cmaps/",
+  cMapPacked: true,
+  iccUrl: "/pdfjs/iccs/",
+} as const;
+
 type PdfDocument = pdfjs.PDFDocumentProxy;
 
 interface PdfReaderProps {
@@ -48,7 +66,7 @@ export function PdfReader({ book }: PdfReaderProps) {
       try {
         const url = await bookAssetUrl(book.id);
         if (cancelled) return;
-        const task = pdfjs.getDocument({ url });
+        const task = pdfjs.getDocument({ url, ...PDF_ASSETS });
         taskRef.current = task;
         const doc = await task.promise;
         if (cancelled) {

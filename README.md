@@ -76,6 +76,13 @@ PDF highlights are stored as rectangles expressed as fractions of the page, not
 as pixels, which is what lets a highlight made at 100% come back in exactly the
 right place at 250% or in a resized window.
 
+`scripts/copy-pdfjs-assets.mjs` copies pdf.js's wasm decoders, standard fonts and
+CJK cmaps into `public/pdfjs` before every dev run and build. They are not
+optional: pdf.js v6 decodes JBIG2 and JPEG2000 in WebAssembly and drops those
+images *silently* when the files are missing — which is how a scanned document
+ends up rendering with every word gone, since office scanners put the text layer
+in JBIG2.
+
 Rust owns the catalogue: metadata, covers, archives, the database, and sync.
 Rendering happens in the webview, where the mature engines live — epub.js for EPUB,
 pdf.js for PDF. Books are streamed to those engines over Tauri's asset protocol rather
@@ -138,6 +145,10 @@ symlink-to-device, dir/file confusion).
   and off for Android — the RAR decoder is C++ and is a cross-compile hazard against
   the NDK. CBZ works everywhere.
 - **DRM-protected books** are not supported and will not be.
+- **Scanned PDFs have no text to work with.** Pages render, but search, read-aloud
+  and text highlighting need a text layer, and a scan is only pictures of pages.
+  Bookmarks and page notes still work. Running the file through OCR first — with
+  `ocrmypdf`, for instance — gives it a text layer and the rest follows.
 - **Comics cannot be annotated** — there is no text to select in a page image.
 
 ## 📜 Licence

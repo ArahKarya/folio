@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.2.0",
   "type": "module",
-  "description": "Folio — pembaca buku digital lintas platform (EPUB, PDF, komik, MOBI)",
+  "description": "Folio \u2014 pembaca buku digital lintas platform (EPUB, PDF, komik, MOBI)",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -13,7 +13,10 @@
     "app:build": "tauri build",
     "android:init": "tauri android init",
     "android:dev": "tauri android dev",
-    "android:build": "tauri android build"
+    "android:build": "tauri android build",
+    "pdfjs:assets": "node scripts/copy-pdfjs-assets.mjs",
+    "predev": "node scripts/copy-pdfjs-assets.mjs",
+    "prebuild": "node scripts/copy-pdfjs-assets.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
