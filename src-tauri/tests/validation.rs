@@ -3,7 +3,7 @@
 //! failure modes a malicious or just careless frontend could trigger.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use folio_lib::db::{books, Db};
 use folio_lib::library;
@@ -56,13 +56,12 @@ fn fixture(name: &str) -> Fixture {
 /// A real book file: minimal but valid EPUB so the format detector accepts
 /// it. Sharing this between tests keeps the focus on what the validation
 /// does, not on EPUB construction.
-fn write_real_epub(path: &PathBuf) -> PathBuf {
-    let path = path.clone();
-    write_epub_bytes(&path);
-    path
+fn write_real_epub(path: &Path) -> PathBuf {
+    write_epub_bytes(path);
+    path.to_path_buf()
 }
 
-fn write_epub_bytes(path: &PathBuf) {
+fn write_epub_bytes(path: &Path) {
     let file = std::fs::File::create(path).expect("create epub");
     let mut zip = zip::ZipWriter::new(file);
     let stored =
@@ -116,7 +115,7 @@ fn import_many_rejects_traversal_in_filename() {
     // rejects it before any database write or copy happens, so the batch
     // import reports it as a failure and moves on.
     let sneaky = f.source.join("..").join("escaped.epub");
-    let report = library::import_many(&conn, &f.paths, &[sneaky.clone()]);
+    let report = library::import_many(&conn, &f.paths, std::slice::from_ref(&sneaky));
 
     assert!(report.imported.is_empty(), "the traversal path is not imported");
     assert_eq!(report.failures.len(), 1, "one failure reported");
@@ -175,6 +174,7 @@ fn safe_source_rejects_a_directory_passed_as_a_file() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn safe_source_rejects_a_symlink_pointing_outside_the_picked_folder() {
     // The validator canonicalizes first, so a symlink that *resolves* to a
@@ -184,10 +184,11 @@ fn safe_source_rejects_a_symlink_pointing_outside_the_picked_folder() {
     // character device.
     //
     // We use `/dev/null` as the symlink target because it exists on every
-    // Unix host. On Windows, the test bails (no equivalent of `/dev/null`).
+    // Unix host. Creating a symlink is not in `std::fs` — it lives in the
+    // platform module — so the test is Unix-only rather than bailing at runtime.
     let f = fixture("symlink");
     let link = f.source.join("escape-link");
-    if std::fs::symlink("/dev/null", &link).is_err() {
+    if std::os::unix::fs::symlink("/dev/null", &link).is_err() {
         return;
     }
     let err = library::safe_source(&link).unwrap_err().to_string();
